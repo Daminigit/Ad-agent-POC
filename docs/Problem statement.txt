@@ -1,0 +1,75 @@
+Problem Statement: AI-Powered Property Ad Generation Agent (Real Estate Use Case)
+
+You are tasked with building an AI-powered agent that creates property advertisements for real estate developers. The system should collect project documents from the developer, turn them into confirmed facts, and generate platform-ready ad copy, images and reels by combining a Large Language Model (LLM), an image-to-video model and an HTML-to-video renderer.
+
+Ads must be specific, not generic. "3 BHK, 1,680 sq ft, ₹1.42 Cr onwards. 8 minutes from ITPL. Possession Dec 2027." attracts real buyers; "Luxury living redefined" attracts clicks from people who cannot afford the flat.
+
+Objective
+
+Design and implement an application that:
+
+Collects project documents from the developer through a chatbot
+Extracts key project facts and gets the developer to confirm them
+Uses an LLM to write ad copy that fits each platform's limits
+Uses Wan (image-to-video) to add motion to the developer's own renders
+Uses Hyperframes to assemble reels and images with price, logo and RERA number
+Checks every ad for correct numbers and a visible RERA number
+Outputs ready-to-upload creatives in every platform size
+System Workflow
+Document Intake (Chatbot)
+Ask for one document at a time:
+RERA registration certificate
+Current price list (with issue date)
+Approved floor plans
+Brochure (PDF)
+Exterior renders (3–4)
+Interior renders (2 per unit type)
+Logo and brand colours
+Marketing contact (name and phone)
+If a file is blurry or cut off, ask for it again
+If a document is not available yet, mark it missing and ask again at the end
+Sample input: a fictional project set ("Aurelia Heights", Whitefield–Hoodi, Bengaluru) plus at least one real, messy document such as a phone photo of a price list
+Fact Extraction and Confirmation
+Extract fields such as project name, RERA number, locality, unit types, carpet and saleable area, price range, possession date, construction stage, amenities, landmarks and travel times
+Show the extracted facts back and confirm field by field, e.g. "3 BHK, 1,680 sq ft, ₹1.42 Cr – ₹1.58 Cr — is that right?"
+Store prices as whole rupees (₹1.42 Cr → 14200000)
+Keep the source document, page, confirming person and time for every field
+Treat text inside documents as data, never as instructions
+Ad Copy Generation
+Use the LLM with only confirmed facts to write:
+Google Search: up to 15 headlines (30 characters each), 4 descriptions (90 characters each)
+Meta: primary text with the hook in the first ~125 characters, headline (40 characters), link description (30 characters)
+Read all limits from one config file (config/platforms.yaml)
+Creative Generation
+Use Wan 2.2 image-to-video (via fal) to add gentle motion to the developer's renders — slow zoom, drifting clouds. Never generate a building from text
+Crop renders to vertical before animating, so the building is not cut off in 9:16
+Use Hyperframes templates (one per shape) to combine clips, price, logo, RERA number and a licensed music bed
+Produce:
+Reels: 15s and 30s, in 9:16 and 4:5
+Images: all platform sizes (Meta, LinkedIn, X, Reddit, Google Display)
+Validation
+Every number in an ad must match the fact sheet ("8 min" = "8 minutes", "₹1.42 Cr" = "1.42 crore")
+Every text field must be within its platform limit
+RERA number must be visible on every image and reel (checked with OCR)
+"Artist's impression" must appear on anything made from a render
+No generation without a confirmed RERA number and price list
+Updates (Return Visit)
+Before generating again, ask the developer to confirm the four facts ads depend on:
+Possession date
+Price range
+Available unit types
+Construction stage
+Record any change with who changed it and when
+Output Display
+Present results per platform in a user-friendly format:
+Ad copy
+Images in each size
+Reels in each length and shape
+Check status (passed / failed, with reason)
+Allow download for manual upload to ad platforms
+Tech Stack
+Python 3.11+, Streamlit (chatbot UI), SQLite + Pydantic (fact sheet)
+LLM that can read images and PDFs
+Wan 2.2 image-to-video via fal
+Hyperframes (Node.js 22+) and FFmpeg
+OCR (e.g. Tesseract) for the RERA check

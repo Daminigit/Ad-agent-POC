@@ -1,0 +1,60 @@
+platforms:
+  google_search:
+    headline:
+      max_chars: 30
+      max_count: 15
+    description:
+      max_chars: 90
+      max_count: 4
+
+  meta:
+    primary_text:
+      hook_chars: 125        # visible before "See more"
+    headline:
+      max_chars: 40
+    link_description:
+      max_chars: 30
+
+creative_sizes:
+  reels:
+    - aspect: "9:16"
+      width: 1080
+      height: 1920
+      durations: [15]
+
+  images:
+    - platform: meta
+      sizes:
+        - { width: 1080, height: 1080, label: "square" }
+        - { width: 1080, height: 1350, label: "portrait" }
+        - { width: 1080, height: 1920, label: "story" }
+    - platform: linkedin
+      sizes:
+        - { width: 1200, height: 627,  label: "landscape" }
+        - { width: 1080, height: 1080, label: "square" }
+    - platform: x
+      sizes:
+        - { width: 1600, height: 900,  label: "landscape" }
+        - { width: 1080, height: 1080, label: "square" }
+    - platform: reddit
+      sizes:
+        - { width: 1200, height: 628,  label: "landscape" }
+    - platform: google_display
+      sizes:
+        - { width: 300,  height: 250,  label: "medium_rectangle" }
+        - { width: 728,  height: 90,   label: "leaderboard" }
+        - { width: 336,  height: 280,  label: "large_rectangle" }
+        - { width: 320,  height: 50,   label: "mobile_banner" }
+
+wan:
+  provider: "fal"
+  model: "fal-ai/wan/v2.2/image-to-video"
+  motion_strength: 0.4
+  prompt: "gentle slow zoom, drifting clouds, cinematic real estate, smooth motion"
+  resolutions:
+    draft: "480p"
+    final: "720p"
+
+validation:
+  blurriness_threshold: 100.0    # Laplacian variance; below this → blurry
+  ocr_engine: tesseract

@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en" data-resolution="portrait">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1080, height=1920" />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700;900&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 1080px; height: 1920px;
+        overflow: hidden; background: #000;
+        font-family: 'Outfit', sans-serif;
+      }
+      #container {
+        width: 100%; height: 100%;
+        position: relative;
+      }
+      
+      /* Background */
+      #bg-image {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        object-fit: cover;
+        transform-origin: center center;
+        filter: blur(10px) brightness(0.8);
+      }
+      #overlay {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        background: linear-gradient(to top, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.6) 100%);
+      }
+      
+      /* Accents */
+      .accent-line {
+        position: absolute;
+        background: rgba(255,255,255,0.8);
+        box-shadow: 0 0 20px rgba(255,255,255,0.5);
+      }
+      #line-top { top: 80px; left: 80px; width: 0; height: 4px; }
+      #line-bottom { bottom: 220px; right: 80px; width: 0; height: 4px; }
+
+      /* Top Elements */
+      #logo-container {
+        position: absolute;
+        top: 100px; right: 80px;
+        max-width: 280px;
+        max-height: 120px;
+        opacity: 0;
+      }
+      #logo {
+        width: 100%; height: 100%;
+        object-fit: contain;
+        filter: drop-shadow(0 4px 12px rgba(0,0,0,0.5));
+      }
+
+      /* Bottom Info */
+      #info-box {
+        position: absolute;
+        bottom: 80px; left: 80px; right: 80px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+      }
+      #price-container {
+        display: flex;
+        flex-direction: column;
+        opacity: 0;
+      }
+      .label {
+        font-family: 'Inter', sans-serif;
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 28px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 4px;
+        margin-bottom: 8px;
+      }
+      #price {
+        color: white;
+        font-size: 80px;
+        font-weight: 900;
+        line-height: 1;
+        text-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        background: linear-gradient(90deg, #fff, #e0e0e0);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      #rera {
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 24px;
+        font-family: 'Inter', sans-serif;
+        opacity: 0;
+      }
+
+      /* Subtitles */
+      #caption-container {
+        position: absolute;
+        bottom: 300px;
+        left: 80px; right: 80px;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+      }
+      .caption-word {
+        display: inline-block;
+        color: rgba(255,255,255,0.4);
+        font-size: 72px;
+        font-weight: 700;
+        line-height: 1.2;
+        margin: 0 10px;
+        text-shadow: 0 4px 20px rgba(0,0,0,0.8);
+        transform: translateY(20px);
+        opacity: 0;
+      }
+      .caption-word.active {
+        color: #ffffff;
+        transform: translateY(0);
+        opacity: 1;
+        text-shadow: 0 0 20px rgba(255,255,255,0.4), 0 4px 20px rgba(0,0,0,0.8);
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="{{duration}}"
+      data-width="1080"
+      data-height="1920"
+    >
+      <div id="container">
+        <!-- Background -->
+        <img id="bg-image" src="{{image_path}}" />
+        <div id="overlay"></div>
+        
+        <!-- Accents -->
+        <div class="accent-line" id="line-top"></div>
+        <div class="accent-line" id="line-bottom"></div>
+
+        <!-- Content -->
+        <div id="logo-container">
+          <img id="logo" src="{{logo_path}}" />
+        </div>
+        
+        <div id="caption-container">
+            <!-- Words injected via JS -->
+        </div>
+
+        <div id="info-box">
+          <div id="price-container">
+            <div class="label">Starting From</div>
+            <div id="price">{{price_text}}</div>
+          </div>
+          <div id="rera">{{rera_number}}</div>
+        </div>
+        
+        <!-- Audio Tracks -->
+        {{audio_tags}}
+      </div>
+    </div>
+
+    <script>
+      const duration = {{duration}};
+      const tl = gsap.timeline({ paused: true });
+      
+      // 1. Cinematic Background Intro
+      tl.to("#bg-image", {
+          filter: "blur(0px) brightness(1)",
+          duration: 1.5,
+          ease: "power2.out"
+      }, 0);
+      
+      // Slow Parallax/Ken Burns over the full duration
+      tl.fromTo("#bg-image", 
+        { scale: 1.1, x: 0, y: 0 }, 
+        { scale: 1.25, x: -20, y: 15, duration: duration, ease: "sine.inOut" }, 
+        0
+      );
+
+      // 2. Animate Accents
+      tl.to("#line-top", { width: 150, duration: 1, ease: "power3.out" }, 0.5);
+      tl.to("#line-bottom", { width: 250, duration: 1, ease: "power3.out" }, 0.7);
+
+      // 3. Stagger Content
+      tl.fromTo("#logo-container",
+          { opacity: 0, y: -30 },
+          { opacity: 1, y: 0, duration: 1, ease: "power3.out" },
+          0.8
+      );
+      
+      tl.fromTo("#price-container",
+          { opacity: 0, y: 50 },
+          { opacity: 1, y: 0, duration: 1, ease: "back.out(1.2)" },
+          1.2
+      );
+      
+      tl.fromTo("#rera",
+          { opacity: 0, x: 30 },
+          { opacity: 1, x: 0, duration: 1, ease: "power2.out" },
+          1.5
+      );
+
+      // 4. Karaoke Subtitles
+      const subtitlesText = `{{subtitles_json}}`;
+      if (subtitlesText && subtitlesText !== '{{subtitles_json}}') {
+          try {
+              const subtitles = JSON.parse(subtitlesText);
+              const captionContainer = document.getElementById('caption-container');
+              
+              // We'll map each word to a span
+              let globalWordIndex = 0;
+              
+              subtitles.forEach((sub, i) => {
+                  // Clean and split text into words
+                  const words = sub.text.trim().split(/\s+/);
+                  const wordDuration = (sub.end - sub.start) / words.length;
+                  
+                  // Create container for this phrase
+                  const phraseDiv = document.createElement('div');
+                  phraseDiv.style.position = 'absolute';
+                  phraseDiv.style.width = '100%';
+                  phraseDiv.style.display = 'flex';
+                  phraseDiv.style.flexWrap = 'wrap';
+                  phraseDiv.style.justifyContent = 'center';
+                  phraseDiv.id = `phrase-${i}`;
+                  
+                  words.forEach((w, wIdx) => {
+                      const span = document.createElement('span');
+                      span.className = 'caption-word';
+                      span.id = `word-${globalWordIndex}`;
+                      span.textContent = w;
+                      phraseDiv.appendChild(span);
+                      
+                      const wordStart = sub.start + (wIdx * wordDuration);
+                      
+                      // Animate word appearing
+                      tl.to(span, {
+                          opacity: 1,
+                          y: 0,
+                          duration: 0.3,
+                          ease: "back.out(1.5)"
+                      }, wordStart - 0.2); // Start slightly before it's spoken
+                      
+                      // Highlight word when spoken
+                      tl.to(span, {
+                          color: "#ffffff",
+                          textShadow: "0 0 20px rgba(255,255,255,0.4), 0 4px 20px rgba(0,0,0,0.8)",
+                          duration: 0.1
+                      }, wordStart);
+                      
+                      // Dim word after spoken
+                      tl.to(span, {
+                          color: "rgba(255,255,255,0.4)",
+                          textShadow: "0 4px 20px rgba(0,0,0,0.8)",
+                          duration: 0.3
+                      }, wordStart + wordDuration);
+                      
+                      globalWordIndex++;
+                  });
+                  
+                  captionContainer.appendChild(phraseDiv);
+                  
+                  // Show/hide entire phrase container
+                  tl.set(phraseDiv, { autoAlpha: 1 }, sub.start - 0.3);
+                  tl.set(phraseDiv, { autoAlpha: 0 }, sub.end + 0.1);
+              });
+          } catch(e) {
+              console.error("Failed to parse subtitles", e);
+          }
+      }
+      
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

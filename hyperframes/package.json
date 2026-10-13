@@ -1,0 +1,15 @@
+{
+  "name": "ad-agent-hyperframes",
+  "version": "1.0.0",
+  "description": "Hyperframes video/image assembly layer for the Ad Generation Agent",
+  "main": "render.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "render": "node render.js"
+  },
+  "dependencies": {
+    "commander": "^12.0.0"
+  }
+}

@@ -1,0 +1,47 @@
+# Environments
+.env
+.env.*
+!.env.example
+.venv*/
+env/
+venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+db/
+
+# Models & Large Binaries (>50MB / GitHub limits)
+models/kokoro/
+*.onnx
+*.bin
+
+# Generated outputs & video scratch
+uploads/
+outputs/
+video/
+
+# Secrets & OAuth Credentials
+*client_secret*.json
+*.pem
+*.key
+
+# Node & Frontend
+node_modules/
+.vercel/
+
+# macOS & IDE
+.DS_Store
+.idea/
+.vscode/
