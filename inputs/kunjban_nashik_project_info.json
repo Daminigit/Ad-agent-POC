@@ -1,0 +1,24 @@
+{
+  "status": "dummy",
+  "project": {
+    "name": "Kunjban Society"
+  },
+  "location": {
+    "lat": 20.015,
+    "lng": 73.81,
+    "address": "Kunjban Society, Hirawadi, Panchavati, Nashik, Maharashtra 422003",
+    "city": "Nashik"
+  },
+  "units": [
+    {
+      "type": "2BHK",
+      "status": "available",
+      "price_min_inr": 4200000
+    },
+    {
+      "type": "3BHK",
+      "status": "available",
+      "price_min_inr": 6500000
+    }
+  ]
+}

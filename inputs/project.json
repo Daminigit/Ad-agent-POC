@@ -1,0 +1,80 @@
+{
+  "status": "verified",
+  "verified_by": "Karnataka RERA Authority & Developer Marketing",
+  "project": {
+    "name": "Aurelia Heights",
+    "promoter": "Aurelia Developers Pvt. Ltd."
+  },
+  "location": {
+    "marketing_name": "Hoodi, Whitefield",
+    "city": "Bengaluru",
+    "address": "Opp. Hoodi Circle, Whitefield Main Road, Bengaluru, Karnataka 560048",
+    "lat": 12.9800,
+    "lng": 77.7200,
+    "travel_times": [
+      "5 min to Hoodi Metro",
+      "10 min to ITPL",
+      "15 min to Phoenix Marketcity"
+    ]
+  },
+  "site_visits": {
+    "days": "Sat & Sun",
+    "start": "10 AM",
+    "end": "6 PM"
+  },
+  "contacts": {
+    "marketing": {
+      "phone": "+91 98765 43210"
+    }
+  },
+  "rera": {
+    "number": "PRM/KA/RERA/1251/446/PR/DUMMY/000123",
+    "valid_until": "2027-12-31"
+  },
+  "units": [
+    {
+      "type": "2 BHK",
+      "status": "available",
+      "carpet_sqft": 1100,
+      "price_min_inr": 9600000,
+      "price_max_inr": 11000000
+    },
+    {
+      "type": "3 BHK",
+      "status": "available",
+      "carpet_sqft": 1680,
+      "price_min_inr": 14200000,
+      "price_max_inr": 15800000
+    }
+  ],
+  "brand": {
+    "colours": {
+      "primary": "#1F2A44",
+      "secondary": "#D4AF37",
+      "background": "#FFFFFF"
+    },
+    "fonts": {
+      "heading": "Playfair Display",
+      "body": "Inter"
+    }
+  },
+  "pricing": {
+    "extra_charges": [
+      "Car parking",
+      "Clubhouse membership",
+      "GST",
+      "Stamp duty & registration"
+    ]
+  },
+  "disclaimers": [
+    "All images are artist's impressions.",
+    "*Price excludes car park, clubhouse, GST, stamp duty & registration.",
+    "Prices subject to revision."
+  ],
+  "review": {
+    "dusk_exterior.png": {
+      "needs_review": false,
+      "verified_date": "2026-10-15"
+    }
+  }
+}

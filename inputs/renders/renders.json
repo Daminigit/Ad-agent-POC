@@ -1,0 +1,22 @@
+[
+  {
+    "file": "tower_exterior.png",
+    "type": "exterior",
+    "approved": true
+  },
+  {
+    "file": "living_room.png",
+    "type": "interior",
+    "approved": true
+  },
+  {
+    "file": "master_bedroom.png",
+    "type": "interior",
+    "approved": true
+  },
+  {
+    "file": "modular_kitchen.png",
+    "type": "interior",
+    "approved": true
+  }
+]

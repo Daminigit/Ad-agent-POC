@@ -1,0 +1,23 @@
+{
+  "project": {
+    "name": "Aurelia Heights"
+  },
+  "location": {
+    "lat": 12.9800,
+    "lng": 77.7200,
+    "address": "Hoodi, Whitefield",
+    "city": "Bengaluru"
+  },
+  "units": [
+    {
+      "type": "2BHK",
+      "status": "available",
+      "price_min_inr": 9600000
+    },
+    {
+      "type": "3BHK",
+      "status": "available",
+      "price_min_inr": 13500000
+    }
+  ]
+}

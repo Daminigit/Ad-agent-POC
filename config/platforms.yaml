@@ -46,14 +46,58 @@ creative_sizes:
         - { width: 336,  height: 280,  label: "large_rectangle" }
         - { width: 320,  height: 50,   label: "mobile_banner" }
 
+# Legacy wan config (preserved for backwards compatibility)
 wan:
   provider: "fal"
-  model: "fal-ai/wan/v2.2/image-to-video"
+  model: "fal-ai/wan-2.6/image-to-video"
+  fallback_models:
+    - "fal-ai/wan-2.6-flash"
+    - "fal-ai/wan/v2.2/image-to-video"
   motion_strength: 0.4
   prompt: "gentle slow zoom, drifting clouds, cinematic real estate, smooth motion"
   resolutions:
-    draft: "480p"
-    final: "720p"
+    draft: "720p"
+    final: "1080p"
+
+# Modern Unified Video Generation Providers
+video_generation:
+  default_provider: "wan_flash"
+  providers:
+    wan_flash:
+      name: "Wan 2.6 Flash"
+      provider: "fal"
+      model: "fal-ai/wan-2.6/image-to-video"
+      fallback_models:
+        - "fal-ai/wan-2.6-flash"
+        - "fal-ai/wan/v2.2/image-to-video"
+      motion_strength: 0.4
+      prompt: "gentle slow zoom, drifting clouds, cinematic real estate, smooth motion, 1080p photorealistic"
+      resolutions:
+        draft: "720p"
+        final: "1080p"
+      cost_per_10s: 0.75
+
+    veo_fast:
+      name: "Veo 3.1 Fast"
+      provider: "google"
+      model: "veo-3.1-fast"
+      fallback_models:
+        - "veo-2.0-generate-001"
+      default_duration: 8
+      allowed_durations: [4, 6, 8]
+      prompt: "Cinematic real estate advertisement footage, photorealistic architectural details, smooth camera glide, realistic natural lighting"
+      resolution: "1080p"
+      cost_per_10s: 1.20
+
+    heygen_avatar:
+      name: "HeyGen API (Avatar IV)"
+      provider: "heygen"
+      avatar_type: "avatar"
+      default_avatar_id: "Daisy-inskirt-20220818"
+      default_voice_id: "1bd001e7e50f421d891986aad5158bc8"
+      avatar_style: "normal"
+      resolution: "1080p"
+      cost_per_10s: 0.81
 
 validation:
   blurriness_threshold: 100.0    # Laplacian variance; below this → blurry

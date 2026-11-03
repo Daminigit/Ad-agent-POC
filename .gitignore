@@ -30,7 +30,11 @@ models/kokoro/
 # Generated outputs & video scratch
 uploads/
 outputs/
+output/
+cache/
 video/
+poster_generator/output/
+poster_generator/cache/
 
 # Secrets & OAuth Credentials
 *client_secret*.json

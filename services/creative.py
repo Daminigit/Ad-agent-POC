@@ -35,6 +35,8 @@ import yaml
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
 
+from services.video_service import VideoJobRequest, get_video_service
+
 load_dotenv()
 
 # ─────────────────────────────────────────────
@@ -59,8 +61,10 @@ ASPECT_RATIOS: dict[str, tuple[int, int]] = {
     spec["aspect"]: (spec["width"], spec["height"])
     for spec in _CREATIVE_SIZES["reels"]
 }
-# Add square for image-only sizes
+# Add square, portrait, and landscape ratios
 ASPECT_RATIOS["1:1"] = (1080, 1080)
+ASPECT_RATIOS["4:5"] = (1080, 1350)
+ASPECT_RATIOS["16:9"] = (1920, 1080)
 
 
 # ─────────────────────────────────────────────
@@ -263,19 +267,47 @@ def animate_render(
     duration: int = 15,
     aspect: str = "9:16",
     quality: str = "draft",
+    provider: str = "wan_flash",
+    prompt: Optional[str] = None,
+    script_text: Optional[str] = None,
+    options: Optional[dict] = None,
 ) -> str:
     """
-    Animate a prepared render using the configured provider.
+    Animate a prepared render using the specified video generation engine.
     
-    Args:
-        quality: "draft" or "final" - mapped to resolution via config.
+    Supported providers:
+      - 'wan_flash': Wan 2.6 Flash via fal.ai ($0.75 / 10s)
+      - 'veo_fast': Veo 3.1 Fast via Google Gemini Veo API ($1.20 / 10s)
+      - 'heygen_avatar': HeyGen API Avatar IV ($0.39 - $0.81 / 10s)
+      - 'fal': Legacy alias for Wan
     """
-    resolution = WAN_RESOLUTIONS.get(quality, "480p")
+    options = options or {}
+    video_service = get_video_service()
+    effective_provider = "wan_flash" if provider in ("fal", "wan", "wan_2.2") else provider
 
+    if effective_provider in video_service.engines:
+        target_quality = "1080p" if quality == "final" else "720p"
+        req = VideoJobRequest(
+            project_id=project_id,
+            aspect=aspect,
+            duration=duration,
+            quality=target_quality,
+            prompt=prompt,
+            image_bytes=image_bytes,
+            script_text=script_text,
+            options=options,
+        )
+        res = video_service.generate(effective_provider, req)
+        if res.success and res.video_path:
+            return res.video_path
+        raise RuntimeError(f"Video generation failed with {effective_provider}: {res.error}")
+
+    # Fallback to legacy _animate_fal if provider is explicitly fal
+    resolution = WAN_RESOLUTIONS.get(quality, "720p")
     if WAN_PROVIDER == "fal":
         return _animate_fal(project_id, image_bytes, duration, aspect, resolution)
     else:
-        raise ValueError(f"Unknown animation provider: {WAN_PROVIDER}")
+        raise ValueError(f"Unknown animation provider: {provider}")
 
 
 # ─────────────────────────────────────────────
@@ -417,6 +449,8 @@ def run_creative_pipeline(
     voice_script: Optional[str] = None,
     animate: bool = True,
     quality: str = "draft",
+    video_provider: str = "wan_flash",
+    provider_options: Optional[dict] = None,
 ) -> dict:
     """
     Run the full creative pipeline for a project.
@@ -424,31 +458,41 @@ def run_creative_pipeline(
     Steps:
       1. Prepare renders (crop + watermark) for each aspect ratio
       2. Produce static images for all platform sizes
-      3. Animate the primary (first) render via Wan 2.2 (if animate=True)
+      3. Animate render via selected video engine:
+         - 'wan_flash': Wan 2.6 Flash via fal.ai
+         - 'veo_fast': Veo 3.1 Fast via Google Gemini Veo API
+         - 'heygen_avatar': HeyGen API Avatar IV
+         - 'hyperframes': Fast Ken Burns zoom motion
       4. Assemble reels via Hyperframes for each aspect × duration
 
     Args:
-        project_id:    Project UUID (used for output directory structure).
-        render_paths:  List of paths to developer exterior render images.
-        rera_number:   Confirmed RERA number to overlay on all creatives.
-        price_text:    Price string to overlay, e.g. "₹1.42 Cr onwards".
-        logo_path:     Optional path to developer logo PNG.
-        music_path:    Optional path to licensed music bed MP3.
-        animate:       Set False to skip Wan 2.2 (for testing / no FAL_KEY).
+        project_id:        Project UUID (used for output directory structure).
+        render_paths:      List of paths to developer exterior render images.
+        rera_number:       Confirmed RERA number to overlay on all creatives.
+        price_text:        Price string to overlay, e.g. "₹1.42 Cr onwards".
+        logo_path:         Optional path to developer logo PNG.
+        music_path:        Optional path to licensed music bed MP3.
+        voice_script:      Voice narration script.
+        animate:           Set False to skip AI video generation (for local testing).
+        quality:           "draft" or "final" (maps to 720p or 1080p).
+        video_provider:    Video engine: 'wan_flash', 'veo_fast', 'heygen_avatar', or 'hyperframes'.
+        provider_options:  Additional engine-specific options.
 
     Returns:
         {
           "static_images": { platform: [path, ...] },
-          "clips":         { "9:16": path, "4:5": path },   # if animate=True
-          "reels":         [path, ...],                      # if animate=True
+          "clips":         { "9:16": path, "4:5": path },
+          "reels":         [path, ...],
+          "video_provider": str,
           "errors":        [str, ...],
         }
     """
     result: dict = {
-        "static_images": {},
-        "clips":         {},
-        "reels":         [],
-        "errors":        [],
+        "static_images":  {},
+        "clips":          {},
+        "reels":          [],
+        "video_provider": video_provider,
+        "errors":         [],
     }
 
     if not render_paths:
@@ -464,9 +508,10 @@ def run_creative_pipeline(
     except Exception as exc:
         result["errors"].append(f"Static image generation failed: {exc}")
 
-    # (We no longer return early if not animate, so reels always generate)    # ── Step 3: Animate (Wan 2.2) for each reel aspect ratio ─────────────
+    # ── Step 3: Animate for each reel aspect ratio ────────────────────────
     for reel_spec in _CREATIVE_SIZES["reels"]:
         aspect = reel_spec["aspect"]
+        fallback_path = None
         try:
             prepped = prepare_render(primary_render, aspect=aspect)
             
@@ -476,26 +521,31 @@ def run_creative_pipeline(
             fallback_path = out_dir / f"fallback_{aspect.replace(':', '_')}.jpg"
             fallback_path.write_bytes(prepped)
             
-            if animate:
+            if animate and video_provider != "hyperframes":
                 clip_path = animate_render(
                     project_id=project_id,
                     image_bytes=prepped,
-                    duration=reel_spec["durations"][0],   # animate once, reuse for both durations
+                    duration=reel_spec["durations"][0],
                     aspect=aspect,
                     quality=quality,
+                    provider=video_provider,
+                    script_text=voice_script,
+                    options=provider_options,
                 )
                 result["clips"][aspect] = clip_path
             else:
                 result["clips"][aspect] = str(fallback_path)
                 
         except Exception as exc:
-            result["errors"].append(f"Animation failed for {aspect}: {exc}")
-            result["clips"][aspect] = str(fallback_path)
+            result["errors"].append(f"Animation failed for {aspect} via {video_provider}: {exc}")
+            if fallback_path:
+                result["clips"][aspect] = str(fallback_path)
 
     # ── Step 3.5: Voiceover (Kokoro TTS) ───────────────────────────────
+    # For HeyGen Avatar IV, the avatar already speaks the script with lip-sync!
     voice_wav = None
     voice_srt = None
-    if voice_script:
+    if voice_script and video_provider != "heygen_avatar":
         try:
             from services.tts import generate_voiceover
             out_dir = str(OUTPUT_ROOT / project_id / "audio")
@@ -520,7 +570,7 @@ def run_creative_pipeline(
                     logo_path=logo_path,
                     aspect=aspect,
                     duration=duration,
-                    music_path=music_path,
+                    music_path=music_path if video_provider != "heygen_avatar" else None,
                     voice_url=voice_wav,
                     srt_path=voice_srt,
                 )
