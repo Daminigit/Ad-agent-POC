@@ -34,7 +34,7 @@ import math
 from pathlib import Path
 from typing import Optional, Tuple
 
-from PIL import Image, ImageColor, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 try:
     from config import SIZES
@@ -1121,6 +1121,374 @@ def _render_executive_editorial(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Template 6 – Reel Overlay
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _weighted_font(font_name: str, size: int, weight: str = "Regular") -> ImageFont.FreeTypeFont:
+    """Like _get_font, but selects a named weight on variable fonts (Inter / Playfair)."""
+    font = _get_font(font_name, size)
+    try:
+        font.set_variation_by_name(weight)
+    except Exception:
+        pass
+    return font
+
+
+def _fit_weighted(draw, text, font_name, weight, max_w, initial_size, min_size=12):
+    size = initial_size
+    while size > min_size:
+        font = _weighted_font(font_name, size, weight)
+        if draw.textlength(text, font=font) <= max_w:
+            return font
+        size -= 1
+    return _weighted_font(font_name, min_size, weight)
+
+
+def _shadow_text(draw, sdraw, xy, text, font, fill="#FFFFFF", offset=2):
+    """Draw text on `draw`, and its silhouette on `sdraw` (a layer blurred later into a soft shadow)."""
+    x, y = xy
+    sdraw.text((x + offset, y + offset), text, font=font, fill=(0, 0, 0, 190))
+    draw.text((x, y), text, font=font, fill=fill)
+
+
+def _text_h(draw, text, font) -> int:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[3]
+
+
+def _draw_pin(draw, x: int, y: int, size: int, fill="#FFFFFF") -> None:
+    """Map-pin icon: circle head with a point below, hole punched in the middle."""
+    r = size // 3
+    cx = x + size // 2
+    draw.ellipse([(cx - r, y), (cx + r, y + 2 * r)], fill=fill)
+    draw.polygon([(cx - int(r * 0.85), y + int(r * 1.5)), (cx + int(r * 0.85), y + int(r * 1.5)), (cx, y + size)], fill=fill)
+    hr = max(2, r // 3)
+    draw.ellipse([(cx - hr, y + r - hr), (cx + hr, y + r + hr)], fill=(0, 0, 0, 0))
+
+
+def _contrast_with_white(rgb) -> float:
+    def lin(c):
+        c /= 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    lum = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2])
+    return 1.05 / (lum + 0.05)
+
+
+def _photo_palette(bg: Image.Image, fallback_rgb) -> dict:
+    """
+    Pick an accent that belongs to the photo (forest green on foliage, terracotta on a
+    warm facade, teal on a pool) instead of a fixed brand colour that may clash with it.
+    The dominant saturated hue of the lower 60% (the subject, not the sky) is rebuilt at a
+    rich saturation and darkened until white text on it meets WCAG AA (>= 4.5:1).
+    Returns {"accent", "deep", "tint"} RGB tuples.
+    """
+    import colorsys
+
+    small = bg.convert("RGB").resize((64, 64))
+    small = small.crop((0, int(64 * 0.4), 64, 64))
+    bins = [0.0] * 12
+    hue_sum = [0.0] * 12
+    for r, g, b in small.getdata():
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        if s < 0.22 or not (0.15 < v < 0.92):
+            continue
+        i = int(h * 12) % 12
+        bins[i] += s * v
+        hue_sum[i] += h * s * v
+
+    total = sum(bins)
+    if total < 6.0:  # mostly grey / white photo → keep the brand colour
+        h, l, s = colorsys.rgb_to_hls(*(c / 255 for c in fallback_rgb))
+    else:
+        i = max(range(12), key=lambda k: bins[k])
+        h = hue_sum[i] / bins[i]
+        s = 0.55
+        # Muddy orange/yellow (wood, sunsets) reads cheap when darkened; push it toward
+        # terracotta / olive so it stays premium.
+        if 0.06 < h < 0.14:
+            h = 0.045
+        elif 0.14 <= h < 0.19:
+            h = 0.22
+        l = 0.42
+
+    def build(light):
+        return tuple(int(c * 255) for c in colorsys.hls_to_rgb(h, light, s))
+
+    accent = build(l)
+    while _contrast_with_white(accent) < 4.8 and l > 0.12:
+        l -= 0.02
+        accent = build(l)
+    return {
+        "accent": accent,
+        "deep": build(max(0.06, l * 0.32)),
+        "tint": build(min(0.88, l + 0.42)),
+    }
+
+
+def _reel_highlights(project: ProjectData) -> list:
+    """
+    Up to 2 big-number stats (e.g. "53 Acres | 53 Amenities").
+    Uses `highlights: [{"value": "53", "label": "Acres"}, ...]` from the project JSON when
+    present; otherwise derives them from travel times ("5 min to Hoodi Metro").
+    """
+    raw = project.raw_data.get("highlights") or []
+    stats = [
+        (str(h.get("value", "")).strip(), str(h.get("label", "")).strip())
+        for h in raw if isinstance(h, dict) and str(h.get("value", "")).strip()
+    ]
+    if not stats:
+        # "5 min to Hoodi Metro" -> ("5", "min to Hoodi Metro")
+        for t in getattr(project, "travel_times", []) or []:
+            num, _, rest = t.strip().partition(" ")
+            if num.replace(".", "", 1).isdigit() and rest:
+                stats.append((num, rest))
+    return stats[:2]
+
+
+def _reel_size_line(project: ProjectData) -> Optional[Tuple[str, str]]:
+    """("Carpet area starting", "1,100 Sq. Ft.") from the smallest available unit, if any."""
+    sizes = []
+    for u in project.raw_data.get("units", []) or []:
+        if not isinstance(u, dict) or str(u.get("status", "available")).lower() != "available":
+            continue
+        sqft = u.get("plot_sqft") or u.get("carpet_sqft") or u.get("sqft")
+        if isinstance(sqft, (int, float)) and sqft > 0:
+            sizes.append(sqft)
+    if not sizes:
+        return None
+    label = project.raw_data.get("size_label") or (
+        "Plot sizes starting"
+        if any(isinstance(u, dict) and u.get("plot_sqft") for u in project.raw_data.get("units", []))
+        else "Carpet area starting"
+    )
+    return label, f"{int(min(sizes)):,} Sq. Ft."
+
+
+def _render_reel_overlay(
+    background_path, project: ProjectData, logo_path, headline, festival, size_id, output_path
+) -> Image.Image:
+    """
+    Reel Overlay Template
+    ---------------------
+    • Full-bleed photo with a soft dark fade behind the upper text
+    • Logo top-left; small RERA no. + serif project name top-right
+    • Left-aligned info stack: unit size, "Price starts from ₹X onwards*",
+      headline in a white tag, pin + location
+    • Two big-number highlights split by a thin divider
+    • Vertical "T&C Apply | Representative image" note on the right edge
+    • Site-visit CTA pill above a dark RERA strip
+    """
+    sc = SIZES.get(size_id, SIZES["instagram_post"])
+    W, H = sc["width"], sc["height"]
+
+    canvas = _load_background(background_path, W, H)
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    shadow_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    sdraw = ImageDraw.Draw(shadow_layer)
+
+    try:
+        brand_rgb = ImageColor.getrgb(project.brand.primary_colour)
+    except Exception:
+        brand_rgb = (31, 42, 68)
+    try:
+        gold_rgb = ImageColor.getrgb(project.brand.secondary_colour)
+    except Exception:
+        gold_rgb = (201, 162, 39)
+    palette = _photo_palette(canvas, brand_rgb)
+    accent_rgb = palette["accent"]
+
+    rera_h = int(H * 0.078)
+    margin = int(W * 0.09)
+
+    # Dark fade over the top ~70% so white type reads on busy foliage / facades
+    fade_h = int(H * 0.70)
+    for y in range(fade_h):
+        alpha = int(185 * ((1.0 - y / fade_h) ** 0.9))
+        draw.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
+    # Lighter fade under the CTA
+    low_h = int(H * 0.16)
+    for i in range(low_h):
+        alpha = int(140 * (i / low_h) ** 1.6)
+        y = H - rera_h - low_h + i
+        draw.line([(0, y), (W, y)], fill=(0, 0, 0, alpha))
+
+    # ── Top row: logo left, RERA + project name right ──
+    top_y = int(H * 0.06)
+    if logo_path and Path(logo_path).exists():
+        try:
+            logo_img = Image.open(logo_path).convert("RGBA")
+            bbox = logo_img.getbbox()
+            if bbox:
+                logo_img = logo_img.crop(bbox)
+            ratio = min((W * 0.24) / logo_img.width, (H * 0.07) / logo_img.height)
+            logo_img = logo_img.resize(
+                (max(10, int(logo_img.width * ratio)), max(10, int(logo_img.height * ratio))), Image.LANCZOS
+            )
+            pad = int(logo_img.height * 0.16)
+            draw.rounded_rectangle(
+                [(margin - pad, top_y - pad), (margin + logo_img.width + pad, top_y + logo_img.height + pad)],
+                radius=max(8, pad), fill=(255, 255, 255, 215),
+            )
+            overlay.paste(logo_img, (margin, top_y), logo_img)
+        except Exception:
+            pass
+
+    right_edge = W - int(W * 0.07)
+    ry = top_y - int(H * 0.012)
+    rera_small = _weighted_font("Inter", max(13, int(H * 0.0095)), "Medium")
+    rera_label = project.rera_number
+    rw = draw.textlength(rera_label, font=rera_small)
+    draw.text((right_edge - rw, ry), rera_label, font=rera_small, fill=(255, 255, 255, 220))
+    ry += _text_h(draw, rera_label, rera_small) + int(H * 0.014)
+
+    name_font = _fit_weighted(draw, project.name, project.brand.heading_font, "Regular",
+                              max_w=int(W * 0.48), initial_size=int(H * 0.042), min_size=int(H * 0.022))
+    nw = draw.textlength(project.name, font=name_font)
+    _shadow_text(draw, sdraw, (right_edge - nw, ry), project.name, name_font)
+    ry += _text_h(draw, project.name, name_font) + int(H * 0.010)
+
+    # Tagline between two short rules, e.g. "— BY AURELIA DEVELOPERS —"
+    prom = (getattr(project, "promoter", "") or "").strip()
+    tagline = f"BY {prom.upper()}" if prom and prom.lower() != "promoter" else ""
+    if tagline:
+        tag_font = _fit_weighted(draw, tagline, "Inter", "Medium",
+                                 max_w=int(nw * 0.80), initial_size=max(13, int(H * 0.0105)), min_size=11)
+        tw = draw.textlength(tagline, font=tag_font)
+        rule = int(W * 0.03)
+        gap = int(W * 0.008)
+        total = tw + 2 * (rule + gap)
+        tx = right_edge - (nw + total) / 2
+        ty = ry + _text_h(draw, tagline, tag_font) // 2
+        draw.line([(tx, ty), (tx + rule, ty)], fill=(255, 255, 255, 200), width=1)
+        draw.text((tx + rule + gap, ry), tagline, font=tag_font, fill=(255, 255, 255, 230))
+        draw.line([(tx + rule + 2 * gap + tw, ty), (tx + total, ty)], fill=(255, 255, 255, 200), width=1)
+
+    # ── Left info stack ──
+    y = int(H * 0.235)
+    block_w = int(W * 0.62)
+
+    if festival and festival != "None":
+        greet_font = _weighted_font(project.brand.heading_font, int(H * 0.022), "Medium")
+        greet = f"Happy {festival}"
+        _shadow_text(draw, sdraw, (margin, y), greet, greet_font, fill=(*gold_rgb, 255))
+        y += _text_h(draw, greet, greet_font) + int(H * 0.018)
+
+    size_line = _reel_size_line(project)
+    if size_line:
+        label, value = size_line
+        lf = _weighted_font("Inter", int(H * 0.0165), "Regular")
+        vf = _weighted_font("Inter", int(H * 0.024), "Bold")
+        lw = draw.textlength(label + " ", font=lf)
+        vh = _text_h(draw, value, vf)
+        lh = _text_h(draw, label, lf)
+        _shadow_text(draw, sdraw, (margin, y + vh - lh), label, lf)
+        _shadow_text(draw, sdraw, (margin + lw, y), value, vf)
+        y += vh + int(H * 0.016)
+        draw.line([(margin, y), (margin + block_w, y)], fill=(255, 255, 255, 210), width=max(1, int(H * 0.0012)))
+        y += int(H * 0.022)
+
+    has_price = bool(project.lowest_price_inr) and "Request" not in project.formatted_lowest_price
+    if has_price:
+        sf = _weighted_font("Inter", int(H * 0.0185), "Regular")
+        _shadow_text(draw, sdraw, (margin, y), "Price starts from", sf)
+        y += _text_h(draw, "Price starts from", sf) + int(H * 0.008)
+
+        price = project.formatted_lowest_price
+        pf = _fit_weighted(draw, price, "Inter", "Bold",
+                           max_w=int(block_w * 0.72), initial_size=int(H * 0.055), min_size=int(H * 0.03))
+        of = _weighted_font("Inter", int(H * 0.019), "Regular")
+        _shadow_text(draw, sdraw, (margin, y), price, pf)
+        ph = _text_h(draw, price, pf)
+        px = margin + draw.textlength(price, font=pf) + int(W * 0.015)
+        _shadow_text(draw, sdraw, (px, y + ph - _text_h(draw, "onwards*", of)), "onwards*", of)
+        y += ph + int(H * 0.024)
+
+    if headline:
+        hf = _fit_weighted(draw, headline, "Inter", "SemiBold",
+                           max_w=int(W * 0.78), initial_size=int(H * 0.0205), min_size=int(H * 0.013))
+        hw = draw.textlength(headline, font=hf)
+        hh = _text_h(draw, headline, hf)
+        pad_x, pad_y = int(W * 0.014), int(H * 0.008)
+        draw.rectangle([(margin, y), (margin + hw + 2 * pad_x, y + hh + 2 * pad_y)], fill=(255, 255, 255, 245))
+        draw.text((margin + pad_x, y + pad_y), headline, font=hf, fill=(*accent_rgb, 255))
+        y += hh + 2 * pad_y + int(H * 0.016)
+
+    loc = ", ".join(x for x in [getattr(project, "marketing_name", ""), getattr(project, "city", "")] if x)
+    if loc:
+        lof = _fit_weighted(draw, loc, "Inter", "Medium",
+                            max_w=int(W * 0.74), initial_size=int(H * 0.0175), min_size=12)
+        pin = int(_text_h(draw, loc, lof) * 1.05)
+        _draw_pin(draw, margin, y, pin)
+        _shadow_text(draw, sdraw, (margin + int(pin * 0.95), y), loc, lof)
+        y += pin + int(H * 0.035)
+
+    # ── Big-number highlights ──
+    stats = _reel_highlights(project)
+    if stats:
+        col_w = int(W * 0.30)
+        gap = int(W * 0.04)
+        total_w = len(stats) * col_w + (len(stats) - 1) * gap
+        x0 = (W - total_w) // 2
+        sy = max(y, int(H * 0.47))
+        num_h = 0
+        for i, (value, label) in enumerate(stats):
+            cx = x0 + i * (col_w + gap) + col_w // 2
+            nf = _fit_weighted(draw, value, "Inter", "Light",
+                               max_w=col_w, initial_size=int(H * 0.068), min_size=int(H * 0.03))
+            lf = _fit_weighted(draw, label, "Inter", "Regular",
+                               max_w=int(col_w * 1.1), initial_size=int(H * 0.0185), min_size=12)
+            vw = draw.textlength(value, font=nf)
+            num_h = _text_h(draw, value, nf)
+            _shadow_text(draw, sdraw, (cx - vw / 2, sy), value, nf)
+            lw = draw.textlength(label, font=lf)
+            _shadow_text(draw, sdraw, (cx - lw / 2, sy + num_h + int(H * 0.008)), label, lf)
+        for i in range(1, len(stats)):
+            dx = x0 + i * (col_w + gap) - gap // 2
+            draw.line([(dx, sy + int(num_h * 0.05)), (dx, sy + num_h + int(H * 0.03))],
+                      fill=(255, 255, 255, 140), width=max(1, int(W * 0.0015)))
+
+    # ── Vertical T&C note on the right edge ──
+    note = "*T & C Apply | Representative image"
+    nf = _weighted_font("Inter", max(12, int(H * 0.0095)), "Regular")
+    nb = draw.textbbox((0, 0), note, font=nf)
+    note_img = Image.new("RGBA", (nb[2] + 4, nb[3] + 4), (0, 0, 0, 0))
+    ImageDraw.Draw(note_img).text((2, 2), note, font=nf, fill=(255, 255, 255, 200))
+    note_img = note_img.rotate(90, expand=True, resample=Image.BICUBIC)
+    overlay.alpha_composite(note_img, (W - int(W * 0.035) - note_img.width,
+                                       H - rera_h - int(H * 0.17) - note_img.height))
+
+    # ── CTA pill (site visits / phone) ──
+    cta_parts = []
+    sv = getattr(project, "site_visits", None)
+    if sv and is_valid_content(sv.formatted_text):
+        cta_parts.append(sv.formatted_text)
+    if is_valid_content(getattr(project, "marketing_phone", "")):
+        cta_parts.append(f"Call {project.marketing_phone}")
+    if cta_parts:
+        cta = "   |   ".join(cta_parts)
+        cta_h = int(H * 0.05)
+        cta_top = H - rera_h - cta_h - int(H * 0.035)
+        cf = _fit_weighted(draw, cta, "Inter", "SemiBold",
+                           max_w=W - 2 * margin - int(W * 0.06), initial_size=int(cta_h * 0.36), min_size=12)
+        draw.rounded_rectangle([(int(W * 0.05), cta_top), (W - int(W * 0.05), cta_top + cta_h)],
+                               radius=cta_h // 3, fill=(*accent_rgb, 235))
+        cw = draw.textlength(cta, font=cf)
+        ch = _text_h(draw, cta, cf)
+        draw.text(((W - cw) / 2, cta_top + (cta_h - ch) / 2 - 1), cta, font=cf, fill="#FFFFFF")
+
+    _draw_rera_strip(draw, project, W, H,
+                     bg_fill=(*palette["deep"], 255),
+                     text_color="#F8FAFC",
+                     disc_color=(*palette["tint"], 230),
+                     accent_line_color=(*palette["tint"], 160))
+
+    shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(max(2, int(H * 0.004))))
+    canvas = Image.alpha_composite(canvas, shadow_layer)
+    return _finalise(canvas, overlay, project, output_path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Public Dispatcher
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1130,6 +1498,7 @@ TEMPLATES = {
     "minimal_white":       ("🤍 Minimal White",        "Clean white panel, black ink, brand accent border"),
     "cinematic":           ("🎬 Cinematic Dark",       "Full-bleed dark overlay, large headline, frosted info bar"),
     "split_panel":         ("◧ Split Panel",           "Brand-colour vertical band + photo — bold editorial look"),
+    "reel_overlay":        ("🌿 Reel Overlay",         "Full-bleed photo, left-aligned price stack, big-number highlights & CTA pill"),
 }
 
 
@@ -1150,6 +1519,7 @@ def render_poster_with_template(
     ----------
     template : str
         One of: "luxury_navy" | "executive_editorial" | "minimal_white" | "cinematic" | "split_panel"
+        | "reel_overlay"
     (All other parameters are identical to the original render_poster().)
     """
     dispatch = {
@@ -1158,6 +1528,7 @@ def render_poster_with_template(
         "minimal_white":       _render_minimal_white,
         "cinematic":           _render_cinematic,
         "split_panel":         _render_split_panel,
+        "reel_overlay":        _render_reel_overlay,
     }
     fn = dispatch.get(template, _render_luxury_navy)
     return fn(background_path, project, logo_path, headline, festival, size_id, output_path)
