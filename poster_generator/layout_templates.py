@@ -48,16 +48,37 @@ except ImportError:
 # Shared Utilities
 # ─────────────────────────────────────────────────────────────────────────────
 
+class _LiningFont(ImageFont.FreeTypeFont):
+    """
+    Cormorant Garamond defaults to old-style numerals (descending 3/5/9, a "1" that looks
+    like "I"), which make prices and areas hard to read. Turn on lining figures for every
+    measure and draw call unless the caller asks for other OpenType features.
+    """
+    _FEATURES = ["lnum", "kern", "liga"]
+
+    def getbbox(self, text, mode="", direction=None, features=None, *args, **kwargs):
+        return super().getbbox(text, mode, direction, features or self._FEATURES, *args, **kwargs)
+
+    def getlength(self, text, mode="", direction=None, features=None, *args, **kwargs):
+        return super().getlength(text, mode, direction, features or self._FEATURES, *args, **kwargs)
+
+    def getmask2(self, text, mode="", direction=None, features=None, *args, **kwargs):
+        return super().getmask2(text, mode, direction, features or self._FEATURES, *args, **kwargs)
+
+
 def _get_font(font_name: str, size: int) -> ImageFont.FreeTypeFont:
     fonts_dir = Path(__file__).parent / "fonts"
     font_str = str(font_name or "").lower()
-    target_ttf = (
-        fonts_dir / "PlayfairDisplay.ttf"
-        if "playfair" in font_str
-        else fonts_dir / "Inter.ttf"
-    )
+    if "playfair" in font_str:
+        target_ttf = fonts_dir / "PlayfairDisplay.ttf"
+    elif "cormorant" in font_str or "garamond" in font_str:
+        target_ttf = fonts_dir / "CormorantGaramond.ttf"
+    else:
+        target_ttf = fonts_dir / "Inter.ttf"
     if target_ttf.exists():
         try:
+            if target_ttf.name.startswith("Cormorant"):
+                return _LiningFont(str(target_ttf), size)
             return ImageFont.truetype(str(target_ttf), size)
         except Exception:
             pass
@@ -1144,11 +1165,11 @@ def _fit_weighted(draw, text, font_name, weight, max_w, initial_size, min_size=1
     return _weighted_font(font_name, min_size, weight)
 
 
-def _shadow_text(draw, sdraw, xy, text, font, fill="#FFFFFF", offset=2):
+def _shadow_text(draw, sdraw, xy, text, font, fill="#FFFFFF", offset=2, anchor=None):
     """Draw text on `draw`, and its silhouette on `sdraw` (a layer blurred later into a soft shadow)."""
     x, y = xy
-    sdraw.text((x + offset, y + offset), text, font=font, fill=(0, 0, 0, 190))
-    draw.text((x, y), text, font=font, fill=fill)
+    sdraw.text((x + offset, y + offset), text, font=font, fill=(0, 0, 0, 190), anchor=anchor)
+    draw.text((x, y), text, font=font, fill=fill, anchor=anchor)
 
 
 def _text_h(draw, text, font) -> int:
@@ -1264,6 +1285,36 @@ def _reel_size_line(project: ProjectData) -> Optional[Tuple[str, str]]:
     return label, f"{int(min(sizes)):,} Sq. Ft."
 
 
+def _apply_scrims(canvas: Image.Image, boxes) -> Image.Image:
+    """
+    Darken the photo softly behind text that sits low on the poster (below the top fade),
+    so white type stays readable on bright facades or sky. The darker the area already
+    is, the lighter the scrim, so dark foliage keeps its look.
+    """
+    if not boxes:
+        return canvas
+    from PIL import ImageStat
+    W, H = canvas.size
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ldraw = ImageDraw.Draw(layer)
+    for box in boxes:
+        box = (max(0, box[0]), max(0, box[1]), min(W, box[2]), min(H, box[3]))
+        lum = ImageStat.Stat(canvas.crop(box).convert("L")).mean[0] / 255
+        alpha = int(max(70, min(190, (lum - 0.15) * 330)))
+        ldraw.rounded_rectangle(box, radius=int(H * 0.03), fill=(0, 0, 0, alpha))
+    layer = layer.filter(ImageFilter.GaussianBlur(int(H * 0.018)))
+    return Image.alpha_composite(canvas, layer)
+
+
+# Reel Overlay type system: one classic serif for every number and name, one clean sans
+# for every label and sentence, three weights in total, so the poster reads as one family.
+SERIF = "Cormorant Garamond"   # project name, prices, sizes, big numbers, greeting
+SANS = "Inter"                 # labels, tagline, location, headline tag, CTA, notes
+DISPLAY = "SemiBold"           # every serif line
+BODY = "Regular"               # every supporting sans line
+EMPHASIS = "SemiBold"          # sans lines that must pop: headline tag, CTA, stat labels
+
+
 def _render_reel_overlay(
     background_path, project: ProjectData, logo_path, headline, festival, size_id, output_path
 ) -> Image.Image:
@@ -1336,14 +1387,14 @@ def _render_reel_overlay(
 
     right_edge = W - int(W * 0.07)
     ry = top_y - int(H * 0.012)
-    rera_small = _weighted_font("Inter", max(13, int(H * 0.0095)), "Medium")
+    rera_small = _weighted_font(SANS, max(13, int(H * 0.0095)), BODY)
     rera_label = project.rera_number
     rw = draw.textlength(rera_label, font=rera_small)
     draw.text((right_edge - rw, ry), rera_label, font=rera_small, fill=(255, 255, 255, 220))
     ry += _text_h(draw, rera_label, rera_small) + int(H * 0.014)
 
-    name_font = _fit_weighted(draw, project.name, project.brand.heading_font, "Regular",
-                              max_w=int(W * 0.48), initial_size=int(H * 0.042), min_size=int(H * 0.022))
+    name_font = _fit_weighted(draw, project.name, SERIF, DISPLAY,
+                              max_w=int(W * 0.50), initial_size=int(H * 0.052), min_size=int(H * 0.026))
     nw = draw.textlength(project.name, font=name_font)
     _shadow_text(draw, sdraw, (right_edge - nw, ry), project.name, name_font)
     ry += _text_h(draw, project.name, name_font) + int(H * 0.010)
@@ -1352,7 +1403,7 @@ def _render_reel_overlay(
     prom = (getattr(project, "promoter", "") or "").strip()
     tagline = f"BY {prom.upper()}" if prom and prom.lower() != "promoter" else ""
     if tagline:
-        tag_font = _fit_weighted(draw, tagline, "Inter", "Medium",
+        tag_font = _fit_weighted(draw, tagline, SANS, BODY,
                                  max_w=int(nw * 0.80), initial_size=max(13, int(H * 0.0105)), min_size=11)
         tw = draw.textlength(tagline, font=tag_font)
         rule = int(W * 0.03)
@@ -1369,7 +1420,7 @@ def _render_reel_overlay(
     block_w = int(W * 0.62)
 
     if festival and festival != "None":
-        greet_font = _weighted_font(project.brand.heading_font, int(H * 0.022), "Medium")
+        greet_font = _weighted_font(SERIF, int(H * 0.030), DISPLAY)
         greet = f"Happy {festival}"
         _shadow_text(draw, sdraw, (margin, y), greet, greet_font, fill=(*gold_rgb, 255))
         y += _text_h(draw, greet, greet_font) + int(H * 0.018)
@@ -1377,35 +1428,37 @@ def _render_reel_overlay(
     size_line = _reel_size_line(project)
     if size_line:
         label, value = size_line
-        lf = _weighted_font("Inter", int(H * 0.0165), "Regular")
-        vf = _weighted_font("Inter", int(H * 0.024), "Bold")
+        lf = _weighted_font(SANS, int(H * 0.0165), BODY)
+        vf = _weighted_font(SERIF, int(H * 0.032), DISPLAY)
         lw = draw.textlength(label + " ", font=lf)
-        vh = _text_h(draw, value, vf)
-        lh = _text_h(draw, label, lf)
-        _shadow_text(draw, sdraw, (margin, y + vh - lh), label, lf)
-        _shadow_text(draw, sdraw, (margin + lw, y), value, vf)
-        y += vh + int(H * 0.016)
+        ascent, descent = vf.getmetrics()
+        base = y + ascent
+        # Sans label and serif value share one baseline
+        _shadow_text(draw, sdraw, (margin, base), label, lf, anchor="ls")
+        _shadow_text(draw, sdraw, (margin + lw, base), value, vf, anchor="ls")
+        y = base + int(descent * 0.6) + int(H * 0.012)
         draw.line([(margin, y), (margin + block_w, y)], fill=(255, 255, 255, 210), width=max(1, int(H * 0.0012)))
         y += int(H * 0.022)
 
     has_price = bool(project.lowest_price_inr) and "Request" not in project.formatted_lowest_price
     if has_price:
-        sf = _weighted_font("Inter", int(H * 0.0185), "Regular")
+        sf = _weighted_font(SANS, int(H * 0.0175), BODY)
         _shadow_text(draw, sdraw, (margin, y), "Price starts from", sf)
         y += _text_h(draw, "Price starts from", sf) + int(H * 0.008)
 
         price = project.formatted_lowest_price
-        pf = _fit_weighted(draw, price, "Inter", "Bold",
-                           max_w=int(block_w * 0.72), initial_size=int(H * 0.055), min_size=int(H * 0.03))
-        of = _weighted_font("Inter", int(H * 0.019), "Regular")
-        _shadow_text(draw, sdraw, (margin, y), price, pf)
-        ph = _text_h(draw, price, pf)
+        pf = _fit_weighted(draw, price, SERIF, DISPLAY,
+                           max_w=int(block_w * 0.72), initial_size=int(H * 0.068), min_size=int(H * 0.036))
+        of = _weighted_font(SANS, int(H * 0.0175), BODY)
+        ascent, descent = pf.getmetrics()
+        base = y + ascent
         px = margin + draw.textlength(price, font=pf) + int(W * 0.015)
-        _shadow_text(draw, sdraw, (px, y + ph - _text_h(draw, "onwards*", of)), "onwards*", of)
-        y += ph + int(H * 0.024)
+        _shadow_text(draw, sdraw, (margin, base), price, pf, anchor="ls")
+        _shadow_text(draw, sdraw, (px, base), "onwards*", of, anchor="ls")
+        y = base + int(descent * 0.4) + int(H * 0.020)
 
     if headline:
-        hf = _fit_weighted(draw, headline, "Inter", "SemiBold",
+        hf = _fit_weighted(draw, headline, SANS, EMPHASIS,
                            max_w=int(W * 0.78), initial_size=int(H * 0.0205), min_size=int(H * 0.013))
         hw = draw.textlength(headline, font=hf)
         hh = _text_h(draw, headline, hf)
@@ -1416,7 +1469,7 @@ def _render_reel_overlay(
 
     loc = ", ".join(x for x in [getattr(project, "marketing_name", ""), getattr(project, "city", "")] if x)
     if loc:
-        lof = _fit_weighted(draw, loc, "Inter", "Medium",
+        lof = _fit_weighted(draw, loc, SANS, BODY,
                             max_w=int(W * 0.74), initial_size=int(H * 0.0175), min_size=12)
         pin = int(_text_h(draw, loc, lof) * 1.05)
         _draw_pin(draw, margin, y, pin)
@@ -1424,6 +1477,7 @@ def _render_reel_overlay(
         y += pin + int(H * 0.035)
 
     # ── Big-number highlights ──
+    scrim_boxes = []
     stats = _reel_highlights(project)
     if stats:
         col_w = int(W * 0.30)
@@ -1434,23 +1488,26 @@ def _render_reel_overlay(
         num_h = 0
         for i, (value, label) in enumerate(stats):
             cx = x0 + i * (col_w + gap) + col_w // 2
-            nf = _fit_weighted(draw, value, "Inter", "Light",
-                               max_w=col_w, initial_size=int(H * 0.068), min_size=int(H * 0.03))
-            lf = _fit_weighted(draw, label, "Inter", "Regular",
-                               max_w=int(col_w * 1.1), initial_size=int(H * 0.0185), min_size=12)
+            nf = _fit_weighted(draw, value, SERIF, DISPLAY,
+                               max_w=col_w, initial_size=int(H * 0.080), min_size=int(H * 0.036))
+            lf = _fit_weighted(draw, label, SANS, EMPHASIS,
+                               max_w=int(col_w * 1.1), initial_size=int(H * 0.0195), min_size=12)
             vw = draw.textlength(value, font=nf)
             num_h = _text_h(draw, value, nf)
             _shadow_text(draw, sdraw, (cx - vw / 2, sy), value, nf)
             lw = draw.textlength(label, font=lf)
             _shadow_text(draw, sdraw, (cx - lw / 2, sy + num_h + int(H * 0.008)), label, lf)
+            stats_bottom = sy + num_h + int(H * 0.008) + _text_h(draw, label, lf)
         for i in range(1, len(stats)):
             dx = x0 + i * (col_w + gap) - gap // 2
             draw.line([(dx, sy + int(num_h * 0.05)), (dx, sy + num_h + int(H * 0.03))],
                       fill=(255, 255, 255, 140), width=max(1, int(W * 0.0015)))
+        pad = int(H * 0.025)
+        scrim_boxes.append((x0 - pad, sy - pad, x0 + total_w + pad, stats_bottom + pad))
 
     # ── Vertical T&C note on the right edge ──
     note = "*T & C Apply | Representative image"
-    nf = _weighted_font("Inter", max(12, int(H * 0.0095)), "Regular")
+    nf = _weighted_font(SANS, max(12, int(H * 0.0095)), BODY)
     nb = draw.textbbox((0, 0), note, font=nf)
     note_img = Image.new("RGBA", (nb[2] + 4, nb[3] + 4), (0, 0, 0, 0))
     ImageDraw.Draw(note_img).text((2, 2), note, font=nf, fill=(255, 255, 255, 200))
@@ -1469,7 +1526,7 @@ def _render_reel_overlay(
         cta = "   |   ".join(cta_parts)
         cta_h = int(H * 0.05)
         cta_top = H - rera_h - cta_h - int(H * 0.035)
-        cf = _fit_weighted(draw, cta, "Inter", "SemiBold",
+        cf = _fit_weighted(draw, cta, SANS, EMPHASIS,
                            max_w=W - 2 * margin - int(W * 0.06), initial_size=int(cta_h * 0.36), min_size=12)
         draw.rounded_rectangle([(int(W * 0.05), cta_top), (W - int(W * 0.05), cta_top + cta_h)],
                                radius=cta_h // 3, fill=(*accent_rgb, 235))
@@ -1483,6 +1540,7 @@ def _render_reel_overlay(
                      disc_color=(*palette["tint"], 230),
                      accent_line_color=(*palette["tint"], 160))
 
+    canvas = _apply_scrims(canvas, scrim_boxes)
     shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(max(2, int(H * 0.004))))
     canvas = Image.alpha_composite(canvas, shadow_layer)
     return _finalise(canvas, overlay, project, output_path)
