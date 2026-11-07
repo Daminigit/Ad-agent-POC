@@ -120,7 +120,7 @@ def main():
         print(f"  ✓ RERA Number:    {project.rera_number}")
         print(f"  ✓ Units & Price:  {project.formatted_units_summary} from {project.formatted_lowest_price}")
         if not project.is_verified:
-            print("  ⚠️ Notice: Project status is unverified. 'DRAFT - NOT FOR PUBLICATION' watermark will be applied.")
+            print("  ⚠️ Notice: Project status is unverified – confirm the facts before publishing.")
     except Exception as e:
         print(f"\n❌ Validation Error: {e}")
         sys.exit(1)

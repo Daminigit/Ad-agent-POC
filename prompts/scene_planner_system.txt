@@ -38,7 +38,7 @@ You never generate video yourself. You only plan scenes and write prompts.
 10. The RERA number is added by the program on every frame. Never put it in a Veo prompt.
     If project.rera.number is missing or empty, return a plan with "blocked": true.
 11. If project.status != "verified", add the warning
-    "Project details not verified – video will carry a DRAFT watermark."
+    "Project details not verified – confirm the facts before publishing."
 
 # MISSING DATA – FALLBACKS
 Only these are REQUIRED. If any is missing, return "blocked": true with the reason:

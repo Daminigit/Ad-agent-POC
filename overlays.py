@@ -7,7 +7,6 @@ using FFmpeg's hardware-accelerated overlay filter:
   - Disclaimer line directly above RERA
   - Per-scene label: "Artist's impression" (renders) / "For illustration only" (AI close-ups)
   - Amenity text chips (cases C and D)
-  - "DRAFT – NOT FOR PUBLICATION" watermark if unverified
   - Crossfade concatenation of Veo clips and End Card
   - Muxing continuous background music
   - Post-export validation: duration ±1s check and 1fps RERA verification
@@ -57,7 +56,6 @@ def render_overlay_layer(
       - RERA bar at bottom: black, 45% opacity, height >= 2.5% of video height
       - Centred white text: 'RERA No: {number} | *T&C Apply' ('*' only when a price is shown)
       - One-line disclaimer above it
-      - Centre: semi-transparent "DRAFT – NOT FOR PUBLICATION" if the project is unverified
     (show_artists_impression is kept for backwards compatibility; per-scene labels are
     rendered by render_scene_badge_layer.)
     """
@@ -80,11 +78,6 @@ def render_overlay_layer(
     disc_size = max(int(height * 0.014), 10)
     draw.text((width // 2, bar_top - disc_size - 4), disclaimer_line, fill=(240, 240, 240, 220),
               anchor="mm", font=_load_font(disc_size))
-
-    if not project.is_verified:
-        wm_font = _load_font(max(int(height * 0.07), 24), bold=True)
-        draw.text((width // 2, height // 2), "DRAFT – NOT FOR PUBLICATION", fill=(255, 255, 255, 70),
-                  anchor="mm", font=wm_font)
 
     if show_artists_impression:
         _draw_badge(draw, width, height, LABEL_RENDER)

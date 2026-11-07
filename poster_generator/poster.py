@@ -58,7 +58,7 @@ def main():
         print(f"  ✓ RERA No:      {project.rera_number}")
         print(f"  ✓ Units/Price:  {project.formatted_units_summary} from {project.formatted_lowest_price}")
         if not project.is_verified:
-            print("  ⚠️ Project is UNVERIFIED — 'DRAFT - NOT FOR PUBLICATION' watermark will be applied.")
+            print("  ⚠️ Project is UNVERIFIED — confirm the facts before publishing.")
         else:
             print("  ✓ Status:       VERIFIED (Clean broadcast output)")
     except Exception as exc:

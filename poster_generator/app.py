@@ -282,7 +282,7 @@ if uploaded_render_files:
 
 if project_data_obj:
     st.divider()
-    status_label = "VERIFIED PROJECT" if project_data_obj.is_verified else "DRAFT (WATERMARK WILL BE BURNED)"
+    status_label = "VERIFIED PROJECT" if project_data_obj.is_verified else "UNVERIFIED PROJECT"
     status_class = "badge-verified" if project_data_obj.is_verified else "badge-draft"
 
     st.markdown(f"""

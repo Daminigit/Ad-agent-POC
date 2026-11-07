@@ -1148,7 +1148,7 @@ def _common_checks(project: ProjectData, renders: List[RenderInfo]) -> Tuple[Opt
 def _project_warnings(project: ProjectData, logo_available: bool) -> List[str]:
     w = []
     if not project.is_verified:
-        w.append("Project details not verified – video will carry a DRAFT watermark.")
+        w.append("Project details not verified – confirm the facts before publishing.")
     if project.units_status_missing:
         w.append("Unit availability not given – confirm before publishing.")
     if project.all_units_sold_out:
