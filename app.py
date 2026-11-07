@@ -576,6 +576,14 @@ if project_data_obj:
             key="music_vol_slider",
         )
 
+    veo_ambient = st.checkbox(
+        "🌿 Add Veo ambient sound (footsteps, birds, water, diya crackle)",
+        value=False,
+        help="Veo makes natural sound for each clip – no speech, no music – mixed quietly under your "
+             "voiceover and music. Costs more per Veo second than silent clips. Not used in Simulation mode.",
+        key="veo_ambient_toggle",
+    )
+
     # Audio Preview Action Buttons
     prev_col1, prev_col2, prev_col3 = st.columns(3)
     btn_prev_vo = prev_col1.button("🎙️ Preview Voice Alone", use_container_width=True)
@@ -858,6 +866,7 @@ if generate_video_clicked:
                         resolution=resolution,
                         image_path=s.render_path,
                         output_dest=dest,
+                        with_audio=veo_ambient,
                     )
                 except Exception as e:
                     st.warning(f"⚠️ Veo live render notice: {e}. Using cinematic motion fallback.")
@@ -932,6 +941,7 @@ if generate_video_clicked:
                 voiceover_path=voiceover_dest,
                 music_duck_volume=duck_vol,
                 logo_path=active_logo_path,
+                veo_ambient=veo_ambient,
             )
             results.append((pv, out_path, checks, voiceover_dest))
 

@@ -36,6 +36,20 @@ GEMINI_API_VEO_MODELS = ["veo-3.1-fast-generate-preview", "veo-3.1-generate-prev
 DEFAULT_VEO_MODELS = VERTEX_VEO_MODELS
 
 
+AMBIENT_AUDIO_LINE = (
+    " Audio: soft, natural ambient sound of this scene only – gentle footsteps, birdsong, a light breeze,"
+    " water, the soft crackle of diya flames where shown. No speech, no voices, no dialogue, no singing,"
+    " no music, no narration, no traffic, no trains, no vehicles, no engines, no low rumble."
+)
+
+
+def with_ambient_audio(prompt: str) -> str:
+    """Insert the ambient-sound instruction before the closing no-text line (rule 5 stays last)."""
+    marker = " No text, no captions"
+    i = prompt.find(marker)
+    return prompt[:i] + AMBIENT_AUDIO_LINE + prompt[i:] if i >= 0 else prompt + AMBIENT_AUDIO_LINE
+
+
 def _prepare_image(image_bytes: bytes, max_side: int = 1920) -> bytes:
     """Re-encode the render as a JPEG no larger than 1920 px (keeps requests small)."""
     from io import BytesIO
@@ -112,9 +126,11 @@ class VeoClient:
         resolution: str = "720p",
         image_path: Optional[str] = None,
         output_dest: Optional[Path] = None,
+        with_audio: bool = False,
     ) -> Path:
         """
         Generate a video clip using Veo 3.1 Fast (or retrieve from cache).
+        with_audio: ask Veo for natural ambient sound only (no speech, no music); costs more per second.
         Retries up to 2 times on failure.
         """
         # Duration must be 4, 6, or 8 (Veo API constraints)
@@ -128,7 +144,9 @@ class VeoClient:
             image_bytes = Path(image_path).read_bytes()
 
         # 1. Check Cache
-        cache_key = self._compute_cache_key(prompt, dur, aspect_ratio, resolution, image_bytes)
+        api_prompt = with_ambient_audio(prompt) if with_audio else prompt
+        cache_key = self._compute_cache_key(api_prompt + ("|audio" if with_audio else ""), dur, aspect_ratio,
+                                            resolution, image_bytes)
         cached_file = CACHE_DIR / f"veo_{cache_key}.mp4"
         # Fallback animations live under a separate name so they are never mistaken for Veo clips
         mock_file = CACHE_DIR / f"mock_{cache_key}.mp4"
@@ -157,7 +175,8 @@ class VeoClient:
         for attempt in range(1, 3):
             try:
                 clip_path = self._call_veo_api(
-                    prompt=prompt,
+                    prompt=api_prompt,
+                    with_audio=with_audio,
                     duration=dur,
                     aspect_ratio=aspect_ratio,
                     resolution=resolution,
@@ -207,6 +226,7 @@ class VeoClient:
         resolution: str,
         image_bytes: Optional[bytes],
         dest_file: Path,
+        with_audio: bool = False,
     ) -> Path:
         """Start a Veo job and wait for the video.
         Vertex AI (service account) when GCP_PROJECT_ID is set, otherwise the Gemini API key."""
@@ -230,7 +250,8 @@ class VeoClient:
         }
         if use_vertex:
             # Audio is OFF for every clip (the program adds music + voiceover); also cheaper.
-            params.update({"generateAudio": False, "resolution": resolution, "personGeneration": "allow_adult"})
+            params.update({"generateAudio": bool(with_audio), "resolution": resolution,
+                           "personGeneration": "allow_adult"})
         else:
             params["personGeneration"] = "allow_adult"
         payload = {"instances": [instance], "parameters": params}

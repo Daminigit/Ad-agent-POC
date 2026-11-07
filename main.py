@@ -83,6 +83,8 @@ def main():
     parser.add_argument("--agent", action="store_true",
                         help="Plan scenes with the Gemini scene agent (validated; falls back to the rule engine)")
     parser.add_argument("--plan-json", type=str, default=None, help="Write the scene plan JSON to this path")
+    parser.add_argument("--veo-ambient", action="store_true",
+                        help="Ask Veo for ambient sound only (no speech/music) and mix it under the voice and music")
     parser.add_argument(
         "--festival",
         type=str,
@@ -206,6 +208,7 @@ def main():
             clip_files.append(veo.generate_clip(
                 prompt=s.prompt, duration=s.veo_duration, aspect=args.aspect,
                 resolution=args.resolution, image_path=s.render_path, output_dest=dest,
+                with_audio=args.veo_ambient,
             ))
             print(f"    ✓ Scene {s.index} ({s.veo_mode}) ready")
 
@@ -237,7 +240,7 @@ def main():
         out_file, checks = assemble_final_video(
             plan=plan, project=project, clip_paths=clip_files, endcard_path=endcard_dest,
             music_path=music_dest, output_path=final_output, voiceover_path=voiceover_dest,
-            logo_path=args.logo,
+            logo_path=args.logo, veo_ambient=args.veo_ambient,
         )
         print(f"  🎉 {out_file.resolve()}")
         print(f"     Duration {checks['actual_duration']}s (requested {dur}s: "

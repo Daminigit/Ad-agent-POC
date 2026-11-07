@@ -57,15 +57,65 @@ VOICE_SOFTEN = ("highpass=f=90,treble=g=-3:f=5500,"
                 "acompressor=threshold=-22dB:ratio=2.5:attack=20:release=250:makeup=2")   # makeup keeps loudness (≈ -17 LUFS)
 
 
-def audio_mix_filter(music_in: str, voice_in: Optional[str], music_level: float = DEFAULT_MUSIC_LEVEL) -> str:
-    """FFmpeg filter that mixes music (+ voice) into [aout]."""
-    music = f"[{music_in}]{_FMT},loudnorm=I=-16:TP=-2:LRA=7,volume={music_level:.2f}[mbed]"
-    master = f"volume={MASTER_GAIN_DB}dB,alimiter=limit=0.85:attack=5:release=50:level=disabled,{_FMT}[aout]"
+AMBIENT_LEVEL = 0.11         # Veo ambient sound ≈ 10 dB under the music bed
+# Cut Veo's low rumble (it can sound like traffic/trains) and harsh highs: leaves birds, breeze, water, steps
+AMBIENT_CLEAN = "highpass=f=250,highpass=f=250,lowpass=f=9000"
+
+
+def audio_mix_filter(music_in: str, voice_in: Optional[str], music_level: float = DEFAULT_MUSIC_LEVEL,
+                     ambient_in: Optional[str] = None) -> str:
+    """FFmpeg filter that mixes music (+ voice) (+ Veo ambient sound) into [aout]."""
+    parts = [f"[{music_in}]{_FMT},loudnorm=I=-16:TP=-2:LRA=7,volume={music_level:.2f}[mbed]"]
+    labels = ["[mbed]"]
+    if voice_in:
+        parts.append(f"[{voice_in}]{_FMT},{VOICE_SOFTEN},volume={VOICE_LEVEL:.2f}[vsoft]")
+        labels.append("[vsoft]")
+    if ambient_in:
+        parts.append(f"[{ambient_in}]{_FMT},{AMBIENT_CLEAN},loudnorm=I=-20:TP=-3:LRA=7,"
+                     f"volume={AMBIENT_LEVEL:.2f}[amb]")
+        labels.append("[amb]")
     if not voice_in:
-        return f"[{music_in}]{_FMT},loudnorm=I={MASTER_LUFS}:TP=-1.5:LRA=7,{_FMT}[aout]"
-    voice = f"[{voice_in}]{_FMT},{VOICE_SOFTEN},volume={VOICE_LEVEL:.2f}[vsoft]"
-    # normalize=0: amix would otherwise halve both tracks
-    return f"{music}; {voice}; [mbed][vsoft]amix=inputs=2:duration=first:normalize=0,{master}"
+        if not ambient_in:
+            return f"[{music_in}]{_FMT},loudnorm=I={MASTER_LUFS}:TP=-1.5:LRA=7,{_FMT}[aout]"
+        master = f"loudnorm=I={MASTER_LUFS}:TP=-1.5:LRA=7,{_FMT}[aout]"
+    else:
+        master = f"volume={MASTER_GAIN_DB}dB,alimiter=limit=0.85:attack=5:release=50:level=disabled,{_FMT}[aout]"
+    # normalize=0: amix would otherwise lower every track
+    return "; ".join(parts) + f"; {''.join(labels)}amix=inputs={len(labels)}:duration=first:normalize=0,{master}"
+
+
+def _has_audio(path: Path) -> bool:
+    res = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
+                          "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+    return bool(res.stdout.strip())
+
+
+def _stitch_ambient(clips: List[Path], xf: float, dest: Path) -> Optional[Path]:
+    """Join the Veo clips' own sound with the same crossfades as the picture (silence where a clip
+    has none). Returns None when no clip has sound."""
+    flags = [_has_audio(c) for c in clips]
+    if not any(flags):
+        return None
+    inputs: List[str] = []
+    parts: List[str] = []
+    for i, (c, has) in enumerate(zip(clips, flags)):
+        dur = _get_video_duration(c)
+        inputs += ["-i", str(c)]
+        src = f"[{i}:a]{_FMT}," if has else "anullsrc=r=44100:cl=stereo,"
+        parts.append(f"{src}apad,atrim=0:{dur:.3f},asetpts=N/SR/TB,{_FMT}[a{i}]")
+    last = "a0"
+    for i in range(1, len(clips)):
+        nxt = f"x{i}"
+        parts.append(f"[{last}][a{i}]acrossfade=d={max(0.05, xf):.3f}:c1=tri:c2=tri[{nxt}]")
+        last = nxt
+    parts.append(f"[{last}]anull[aout]")
+    cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(parts), "-map", "[aout]", "-ac", "2",
+           "-ar", "44100", str(dest)]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"[Ambient] ⚠️ Could not join Veo sound: {res.stderr.strip()[-200:]}")
+        return None
+    return dest
 
 
 def render_overlay_layer(
@@ -160,8 +210,8 @@ def _trim_clip(src: Path, seconds: float, dest: Path) -> Path:
     if _get_video_duration(src) <= seconds + 0.05:
         return src
     subprocess.run(
-        ["ffmpeg", "-y", "-i", str(src), "-t", f"{seconds:.2f}", "-an",
-         "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", str(dest)],
+        ["ffmpeg", "-y", "-i", str(src), "-t", f"{seconds:.2f}",
+         "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", str(dest)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
     )
     return dest
@@ -177,6 +227,7 @@ def assemble_final_video(
     voiceover_path: Optional[Path] = None,
     music_duck_volume: float = DEFAULT_MUSIC_LEVEL,
     logo_path: Optional[str] = None,
+    veo_ambient: bool = False,
 ) -> Tuple[Path, Dict[str, Any]]:
     """
     Trim clips to the plan, stitch with crossfades, mix voiceover over music, and burn the
@@ -230,14 +281,18 @@ def assemble_final_video(
             last = nxt
         music_idx = 2 + len(badge_inputs)
         inputs.extend(["-i", str(music_path)])
+        ambient_path = _stitch_ambient(trimmed, xf, temp_dir / "ambient.wav") if veo_ambient else None
 
         has_voiceover = voiceover_path is not None and Path(voiceover_path).exists()
+        next_idx = music_idx + 1
+        voice_in = ambient_in = None
         if has_voiceover:
-            voice_idx = music_idx + 1
             inputs.extend(["-i", str(voiceover_path)])
-            filter_parts.append(audio_mix_filter(f"{music_idx}:a", f"{voice_idx}:a", music_duck_volume))
-        else:
-            filter_parts.append(audio_mix_filter(f"{music_idx}:a", None))
+            voice_in, next_idx = f"{next_idx}:a", next_idx + 1
+        if ambient_path:
+            inputs.extend(["-i", str(ambient_path)])
+            ambient_in = f"{next_idx}:a"
+        filter_parts.append(audio_mix_filter(f"{music_idx}:a", voice_in, music_duck_volume, ambient_in))
 
         cmd = [
             "ffmpeg", "-y",
