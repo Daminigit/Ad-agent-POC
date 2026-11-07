@@ -98,11 +98,20 @@ def _draw_badge(draw: ImageDraw.ImageDraw, width: int, height: int, text: str) -
 
 def render_scene_badge_layer(
     width: int, height: int, label: str, chips: Optional[List[str]] = None,
+    logo_path: Optional[str] = None,
 ) -> Image.Image:
-    """Per-scene layer: top-right label ("Artist's impression" / "For illustration only")
-    and optional amenity text chips (cases C and D)."""
+    """Per-scene layer: top-right label ("Artist's impression" / "For illustration only"),
+    the developer logo in the top-left corner, and optional amenity text chips (cases C and D)."""
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
+    if logo_path and Path(logo_path).exists():
+        try:
+            logo = Image.open(logo_path).convert("RGBA")
+            logo.thumbnail((int(width * 0.2), int(height * 0.08)), Image.LANCZOS)
+            margin = int(height * 0.032)
+            img.alpha_composite(logo, (int(width * 0.025), margin))
+        except Exception:
+            pass
     if label:
         _draw_badge(draw, width, height, label)
     if chips:
@@ -142,6 +151,7 @@ def assemble_final_video(
     output_path: Path,
     voiceover_path: Optional[Path] = None,
     music_duck_volume: float = 0.20,
+    logo_path: Optional[str] = None,
 ) -> Tuple[Path, Dict[str, Any]]:
     """
     Trim clips to the plan, stitch with crossfades, mix voiceover over music, and burn the
@@ -176,9 +186,9 @@ def assemble_final_video(
         for i, scene in enumerate(veo_scenes):
             start, end = t, t + scene.duration_seconds
             chips = plan.amenity_text_chips if scene.show_amenity_chips else None
-            if scene.label or chips:
+            if scene.label or chips or logo_path:
                 bp = temp_dir / f"badge_{i}.png"
-                render_scene_badge_layer(width, height, scene.label, chips).save(str(bp))
+                render_scene_badge_layer(width, height, scene.label, chips, logo_path).save(str(bp))
                 # Labels switch at the middle of each crossfade
                 badge_inputs.append((bp, start + (xf / 2 if i else 0), end - xf / 2))
             t = end - xf

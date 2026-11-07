@@ -237,6 +237,7 @@ def main():
         out_file, checks = assemble_final_video(
             plan=plan, project=project, clip_paths=clip_files, endcard_path=endcard_dest,
             music_path=music_dest, output_path=final_output, voiceover_path=voiceover_dest,
+            logo_path=args.logo,
         )
         print(f"  🎉 {out_file.resolve()}")
         print(f"     Duration {checks['actual_duration']}s (requested {dur}s: "

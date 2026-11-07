@@ -27,7 +27,7 @@ from project_data import (
 from planner import AdPlan, fmt_seconds, plan_all_versions, plan_video_ad, plan_with_agent, validate_plan
 from veo_client import VeoClient
 from music import build_music_track
-from endcard import create_endcard_clip
+from endcard import create_endcard_clip, render_endcard_image
 from overlays import assemble_final_video
 from script_writer import generate_script_options, ScriptOption, get_script_timing_profile
 from voiceover import generate_indian_voiceover, voice_window_seconds
@@ -308,7 +308,7 @@ if st.session_state.get("use_sample", False) or (not uploaded_project_file and P
 if uploaded_project_file:
     try:
         p_temp = temp_workspace / uploaded_project_file.name
-        p_temp.write_bytes(uploaded_project_file.read())
+        p_temp.write_bytes(uploaded_project_file.getvalue())
         project_data_obj = parse_project_json(p_temp)
     except Exception as exc:
         st.error(f"❌ Project JSON Error: {exc}")
@@ -316,12 +316,13 @@ if uploaded_project_file:
 
 if uploaded_logo_file:
     l_temp = temp_workspace / uploaded_logo_file.name
-    l_temp.write_bytes(uploaded_logo_file.read())
+    l_temp.write_bytes(uploaded_logo_file.getvalue())
     active_logo_path = str(l_temp)
+    st.image(str(l_temp), caption="✅ Logo uploaded – shown on the end card and in the corner of every scene", width=220)
 
 if uploaded_music_file:
     m_temp = temp_workspace / uploaded_music_file.name
-    m_temp.write_bytes(uploaded_music_file.read())
+    m_temp.write_bytes(uploaded_music_file.getvalue())
     active_music_path = str(m_temp)
 
 # Render upload annotations UI
@@ -333,7 +334,7 @@ if uploaded_render_files:
 
     for idx, r_file in enumerate(uploaded_render_files):
         r_dest = temp_workspace / r_file.name
-        r_dest.write_bytes(r_file.read())
+        r_dest.write_bytes(r_file.getvalue())
         with r_cols[idx % 3]:
             try:
                 img_prev = Image.open(r_dest)
@@ -778,6 +779,15 @@ if preview_plan_clicked or st.session_state.get("show_plan", False):
             st.dataframe(pv.to_table_data(), use_container_width=True, hide_index=True)
             st.caption(f"🎙️ **Voiceover ({pv.voiceover_word_count} words):** {pv.voiceover_script}")
             st.caption("🏷️ **End card:** " + " | ".join(pv.end_card.get("lines", [])))
+            try:
+                ec_img = render_endcard_image(
+                    project=project_data_obj, logo_path=active_logo_path, festival=selected_festival,
+                    aspect=aspect_ratio, resolution="720p", card=pv.end_card,
+                )
+                st.image(ec_img, caption=f"End card preview ({pv.endcard_duration}s)"
+                         + ("" if logo_ok else " – no logo uploaded"), width=420)
+            except Exception as exc:
+                st.caption(f"End card preview unavailable: {exc}")
             if pv.amenity_text_chips:
                 st.caption("🔖 **Amenity chips:** " + " • ".join(pv.amenity_text_chips))
 
@@ -917,6 +927,7 @@ if generate_video_clicked:
                 output_path=final_file,
                 voiceover_path=voiceover_dest,
                 music_duck_volume=duck_vol,
+                logo_path=active_logo_path,
             )
             results.append((pv, out_path, checks, voiceover_dest))
 
