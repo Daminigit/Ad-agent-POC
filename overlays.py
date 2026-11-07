@@ -5,7 +5,8 @@ Renders pixel-perfect text overlays with Pillow and comps them onto video
 using FFmpeg's hardware-accelerated overlay filter:
   - RERA BAR on every frame (black 45% opacity, >=2.5% height)
   - Disclaimer line directly above RERA
-  - "Artist's impression" badge on render scenes
+  - Per-scene label: "Artist's impression" (renders) / "For illustration only" (AI close-ups)
+  - Amenity text chips (cases C and D)
   - "DRAFT – NOT FOR PUBLICATION" watermark if unverified
   - Crossfade concatenation of Veo clips and End Card
   - Muxing continuous background music
@@ -23,8 +24,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
-from project_data import ProjectData
-from planner import AdPlan
+from project_data import DEFAULT_DISCLAIMER, ProjectData
+from planner import LABEL_RENDER, AdPlan
 
 
 def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -48,77 +49,95 @@ def render_overlay_layer(
     height: int,
     project: ProjectData,
     show_artists_impression: bool = False,
+    disclaimers: Optional[List[str]] = None,
+    show_price_asterisk: bool = True,
 ) -> Image.Image:
     """
-    Render transparent RGBA overlay image conforming strictly to Section 8:
-      - RERA Bar at bottom: black, 45% opacity, height >= 2.5% of video height
-      - Centered white text: 'RERA No: {number} | *T&C Apply'
-      - Above it: one-line disclaimer
-      - Top-right corner: small "Artist's impression" label (if render scene)
-      - Centre: semi-transparent "DRAFT – NOT FOR PUBLICATION" (if unverified)
+    Persistent legal layer shown on every frame:
+      - RERA bar at bottom: black, 45% opacity, height >= 2.5% of video height
+      - Centred white text: 'RERA No: {number} | *T&C Apply' ('*' only when a price is shown)
+      - One-line disclaimer above it
+      - Centre: semi-transparent "DRAFT – NOT FOR PUBLICATION" if the project is unverified
+    (show_artists_impression is kept for backwards compatibility; per-scene labels are
+    rendered by render_scene_badge_layer.)
     """
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # 1. RERA Bottom Bar: height >= 2.5% (we use 3.8% for legibility)
     bar_height = max(int(height * 0.038), 36)
     bar_top = height - bar_height
-    # Black at 45% opacity -> alpha = 115
     draw.rectangle([(0, bar_top), (width, height)], fill=(0, 0, 0, 115))
 
-    # Centered white RERA text
-    rera_font_size = max(int(height * 0.019), 13)
-    rera_font = _load_font(rera_font_size, bold=True)
-    rera_text = f"RERA No: {project.rera_number} | *T&C Apply"
-    draw.text((width // 2, bar_top + (bar_height // 2)), rera_text, fill=(255, 255, 255, 255), anchor="mm", font=rera_font)
+    rera_font = _load_font(max(int(height * 0.019), 13), bold=True)
+    tc = "*T&C Apply" if show_price_asterisk else "T&C Apply"
+    draw.text((width // 2, bar_top + (bar_height // 2)), f"RERA No: {project.rera_number} | {tc}",
+              fill=(255, 255, 255, 255), anchor="mm", font=rera_font)
 
-    # 2. Disclaimer Text (directly above RERA bar)
-    disclaimers = project.disclaimers or [
-        "All images are artist's impressions. *Price excludes car park, clubhouse, GST, stamp duty & registration.",
-        "Prices subject to revision.",
-    ]
-    disclaimer_line = " ".join(disclaimers).replace("'", "").replace('"', '')
+    discs = disclaimers if disclaimers is not None else (project.disclaimers or [DEFAULT_DISCLAIMER])
+    disclaimer_line = " ".join(discs).replace('"', "")
     if len(disclaimer_line) > 130:
         disclaimer_line = disclaimer_line[:127] + "..."
+    disc_size = max(int(height * 0.014), 10)
+    draw.text((width // 2, bar_top - disc_size - 4), disclaimer_line, fill=(240, 240, 240, 220),
+              anchor="mm", font=_load_font(disc_size))
 
-    disc_font_size = max(int(height * 0.014), 10)
-    disc_font = _load_font(disc_font_size, bold=False)
-    disc_y = bar_top - disc_font_size - 4
-    # Subtle dark backing for disclaimer text readability
-    draw.text((width // 2, disc_y), disclaimer_line, fill=(240, 240, 240, 220), anchor="mm", font=disc_font)
-
-    # 3. Top-Right "Artist's impression" badge
-    if show_artists_impression:
-        badge_w = int(width * 0.22)
-        badge_h = int(height * 0.032)
-        badge_x = width - badge_w - int(width * 0.025)
-        badge_y = int(height * 0.032)
-
-        # Translucent dark pill
-        draw.rectangle([(badge_x, badge_y), (badge_x + badge_w, badge_y + badge_h)], fill=(0, 0, 0, 102))
-        ai_font_size = max(int(height * 0.015), 11)
-        ai_font = _load_font(ai_font_size, bold=False)
-        draw.text(
-            (badge_x + (badge_w // 2), badge_y + (badge_h // 2)),
-            "Artist's impression",
-            fill=(255, 255, 255, 230),
-            anchor="mm",
-            font=ai_font,
-        )
-
-    # 4. Unverified DRAFT Watermark
     if not project.is_verified:
-        draft_font_size = max(int(height * 0.052), 24)
-        draft_font = _load_font(draft_font_size, bold=True)
-        draw.text(
-            (width // 2, height // 2),
-            "DRAFT – NOT FOR PUBLICATION",
-            fill=(255, 255, 255, 75),  # Semi-transparent
-            anchor="mm",
-            font=draft_font,
-        )
+        wm_font = _load_font(max(int(height * 0.07), 24), bold=True)
+        draw.text((width // 2, height // 2), "DRAFT – NOT FOR PUBLICATION", fill=(255, 255, 255, 70),
+                  anchor="mm", font=wm_font)
 
+    if show_artists_impression:
+        _draw_badge(draw, width, height, LABEL_RENDER)
     return img
+
+
+def _draw_badge(draw: ImageDraw.ImageDraw, width: int, height: int, text: str) -> None:
+    font = _load_font(max(int(height * 0.015), 11))
+    tw = draw.textlength(text, font=font)
+    badge_w = int(tw + width * 0.03)
+    badge_h = int(height * 0.032)
+    badge_x = width - badge_w - int(width * 0.025)
+    badge_y = int(height * 0.032)
+    draw.rectangle([(badge_x, badge_y), (badge_x + badge_w, badge_y + badge_h)], fill=(0, 0, 0, 102))
+    draw.text((badge_x + badge_w // 2, badge_y + badge_h // 2), text, fill=(255, 255, 255, 230),
+              anchor="mm", font=font)
+
+
+def render_scene_badge_layer(
+    width: int, height: int, label: str, chips: Optional[List[str]] = None,
+) -> Image.Image:
+    """Per-scene layer: top-right label ("Artist's impression" / "For illustration only")
+    and optional amenity text chips (cases C and D)."""
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    if label:
+        _draw_badge(draw, width, height, label)
+    if chips:
+        font = _load_font(max(int(height * 0.026), 14), bold=True)
+        pad_x, pad_y, gap = int(height * 0.02), int(height * 0.012), int(height * 0.015)
+        sizes = [(draw.textlength(c, font=font) + 2 * pad_x) for c in chips]
+        chip_h = int(height * 0.026) + 2 * pad_y
+        total = sum(sizes) + gap * (len(chips) - 1)
+        x = (width - total) / 2
+        y = int(height * 0.74)
+        for c, w in zip(chips, sizes):
+            draw.rounded_rectangle([(x, y), (x + w, y + chip_h)], radius=chip_h // 2, fill=(0, 0, 0, 140),
+                                   outline=(201, 162, 39, 230), width=2)
+            draw.text((x + w / 2, y + chip_h / 2), c, fill=(255, 255, 255, 240), anchor="mm", font=font)
+            x += w + gap
+    return img
+
+
+def _trim_clip(src: Path, seconds: float, dest: Path) -> Path:
+    """Trim a clip to the planned length (shorter versions / last clip)."""
+    if _get_video_duration(src) <= seconds + 0.05:
+        return src
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(src), "-t", f"{seconds:.2f}", "-an",
+         "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", str(dest)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+    )
+    return dest
 
 
 def assemble_final_video(
@@ -129,74 +148,67 @@ def assemble_final_video(
     music_path: Path,
     output_path: Path,
     voiceover_path: Optional[Path] = None,
+    music_duck_volume: float = 0.20,
 ) -> Tuple[Path, Dict[str, Any]]:
     """
-    Stitch scenes with 0.5s crossfades, mix Indian-English voiceover over continuous music,
-    and apply persistent legal overlays.
+    Trim clips to the plan, stitch with crossfades, mix voiceover over music, and burn the
+    legal layer plus per-scene labels ("Artist's impression" / "For illustration only").
+    clip_paths are the Veo clips in plan order (end card excluded).
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix="video_assemble_"))
+    xf = plan.crossfade_seconds
 
     try:
-        all_scene_paths = list(clip_paths) + [endcard_path]
+        veo_scenes = plan.veo_scenes
+        trimmed: List[Path] = []
+        for i, (scene, clip) in enumerate(zip(veo_scenes, clip_paths)):
+            trimmed.append(_trim_clip(Path(clip), scene.duration_seconds, temp_dir / f"trim_{i}.mp4"))
+        all_scene_paths = trimmed + [endcard_path]
 
-        # 1. Stitch scenes with xfade transitions
         stitched_video = temp_dir / "stitched_raw.mp4"
-        _stitch_scenes(all_scene_paths, stitched_video, crossfade_dur=plan.crossfade_seconds)
-
-        # 2. Get video dimensions
+        _stitch_scenes(all_scene_paths, stitched_video, crossfade_dur=xf)
         width, height = _get_video_dimensions(stitched_video)
 
-        # 3. Render base persistent overlay layer (RERA Bar + Disclaimer)
-        base_overlay_img = render_overlay_layer(width, height, project, show_artists_impression=False)
         base_overlay_path = temp_dir / "base_overlay.png"
-        base_overlay_img.save(str(base_overlay_path))
+        render_overlay_layer(
+            width, height, project,
+            disclaimers=plan.disclaimers or None,
+            show_price_asterisk=plan.show_price_asterisk,
+        ).save(str(base_overlay_path))
 
-        # Render render-scene overlay layer (with "Artist's impression")
-        render_overlay_img = render_overlay_layer(width, height, project, show_artists_impression=True)
-        render_overlay_path = temp_dir / "render_overlay.png"
-        render_overlay_img.save(str(render_overlay_path))
+        # Per-scene label windows on the stitched timeline
+        badge_inputs: List[Tuple[Path, float, float]] = []
+        t = 0.0
+        for i, scene in enumerate(veo_scenes):
+            start, end = t, t + scene.duration_seconds
+            chips = plan.amenity_text_chips if scene.show_amenity_chips else None
+            if scene.label or chips:
+                bp = temp_dir / f"badge_{i}.png"
+                render_scene_badge_layer(width, height, scene.label, chips).save(str(bp))
+                # Labels switch at the middle of each crossfade
+                badge_inputs.append((bp, start + (xf / 2 if i else 0), end - xf / 2))
+            t = end - xf
 
-        # Calculate render scenes duration (for "Artist's impression" timing)
-        render_scenes_duration = 0.0
-        for s in plan.scenes:
-            if s.source_type == "render_image":
-                render_scenes_duration += s.duration_seconds - plan.crossfade_seconds
-
-        # 4. Build FFmpeg command with Video Overlays + Audio Mixing
-        # Inputs:
-        # 0: stitched_video
-        # 1: base or render overlay
-        # 2: base overlay (if render overlay used)
-        # Next: music_path
-        # Next (optional): voiceover_path
-
-        inputs = ["-i", str(stitched_video)]
-        filter_parts = []
-
-        if render_scenes_duration > 0:
-            inputs.extend(["-i", str(render_overlay_path), "-i", str(base_overlay_path)])
+        inputs = ["-i", str(stitched_video), "-i", str(base_overlay_path)]
+        filter_parts = ["[0:v][1:v]overlay=0:0[vb0]"]
+        last = "vb0"
+        for k, (bp, start, end) in enumerate(badge_inputs):
+            inputs.extend(["-i", str(bp)])
+            nxt = f"vb{k + 1}"
             filter_parts.append(
-                f"[0:v][1:v]overlay=0:0:enable='between(t,0,{render_scenes_duration:.2f})'[v1]"
+                f"[{last}][{k + 2}:v]overlay=0:0:enable='between(t,{start:.2f},{end:.2f})'[{nxt}]"
             )
-            filter_parts.append(
-                f"[v1][2:v]overlay=0:0:enable='gte(t,{render_scenes_duration:.2f})'[vfinal]"
-            )
-            music_idx = 3
-        else:
-            inputs.extend(["-i", str(base_overlay_path)])
-            filter_parts.append("[0:v][1:v]overlay=0:0[vfinal]")
-            music_idx = 2
-
+            last = nxt
+        music_idx = 2 + len(badge_inputs)
         inputs.extend(["-i", str(music_path)])
 
         has_voiceover = voiceover_path is not None and Path(voiceover_path).exists()
         if has_voiceover:
             voice_idx = music_idx + 1
             inputs.extend(["-i", str(voiceover_path)])
-            # Duck music volume to 0.22 while voiceover plays at 1.0, mixed together
             filter_parts.append(
-                f"[{music_idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=0.22[mduck]; "
+                f"[{music_idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume={music_duck_volume:.2f}[mduck]; "
                 f"[{voice_idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.0[vclean]; "
                 f"[mduck][vclean]amix=inputs=2:duration=first:dropout_transition=2[aout]"
             )
@@ -205,13 +217,11 @@ def assemble_final_video(
                 f"[{music_idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[aout]"
             )
 
-        filter_complex = "; ".join(filter_parts)
-
         cmd = [
             "ffmpeg", "-y",
             *inputs,
-            "-filter_complex", filter_complex,
-            "-map", "[vfinal]",
+            "-filter_complex", "; ".join(filter_parts),
+            "-map", f"[{last}]",
             "-map", "[aout]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "aac", "-b:a", "192k",
@@ -219,12 +229,9 @@ def assemble_final_video(
             "-pix_fmt", "yuv420p",
             str(output_path),
         ]
-
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-        # 5. Post-Export Verification Checks
         checks = verify_exported_video(output_path, plan.requested_duration, temp_dir)
-
         return output_path, checks
 
     finally:

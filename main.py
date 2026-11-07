@@ -19,7 +19,7 @@ from typing import List
 from dotenv import load_dotenv
 
 from project_data import ProjectData, RenderInfo, filter_approved_renders, parse_project_json
-from planner import AdPlan, plan_video_ad
+from planner import AdPlan, fmt_seconds, plan_all_versions, plan_video_ad, plan_with_agent, validate_plan
 from veo_client import VeoClient
 from music import build_music_track
 from endcard import create_endcard_clip
@@ -48,6 +48,7 @@ def load_renders_from_dir(renders_dir: Path) -> List[RenderInfo]:
                         render_type=it.get("type", "exterior"),
                         approved=it.get("approved", True),
                         needs_review=it.get("needs_review", False),
+                        description=it.get("description", ""),
                     ))
             return renders
         except Exception as e:
@@ -77,21 +78,25 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate festive real-estate video ads using Google Gemini Veo 3.1 Fast, Pillow, and FFmpeg."
     )
-    parser.add_argument("--duration", type=int, default=30, help="Video length in seconds (10–60, default 30)")
+    parser.add_argument("--duration", type=str, default="30",
+                        help="Video length in seconds (10–60, default 30), or 'all' for 60 s + 20 s + 10 s from shared clips")
+    parser.add_argument("--agent", action="store_true",
+                        help="Plan scenes with the Gemini scene agent (validated; falls back to the rule engine)")
+    parser.add_argument("--plan-json", type=str, default=None, help="Write the scene plan JSON to this path")
     parser.add_argument(
         "--festival",
         type=str,
         default="Diwali",
         choices=[
             "Diwali", "Ugadi", "Dussehra", "Ganesh Chaturthi", "Onam",
-            "Pongal/Sankranti", "Christmas", "Eid", "New Year", "None"
+            "Pongal/Sankranti", "Christmas", "Eid", "New Year", "None", "Family"
         ],
         help="Festival celebration theme (None for regular ad)"
     )
     parser.add_argument("--aspect", type=str, default="16:9", choices=["16:9", "9:16"], help="Aspect ratio")
     parser.add_argument("--resolution", type=str, default="1080p", choices=["720p", "1080p"], help="Video resolution")
     parser.add_argument("--project", type=str, required=True, help="Path to project details JSON")
-    parser.add_argument("--logo", type=str, required=True, help="Path to developer logo PNG")
+    parser.add_argument("--logo", type=str, default=None, help="Path to developer logo PNG (optional; name is shown instead)")
     parser.add_argument("--renders", type=str, required=True, help="Directory containing render images")
     parser.add_argument("--music", type=str, default=None, help="Optional user-supplied background music audio file")
     parser.add_argument("--script", type=str, default=None, help="Custom voiceover script text or path to a .txt file")
@@ -133,136 +138,109 @@ def main():
         print(f"  - [{r.render_type.upper()}] {Path(r.filepath).name}")
 
     # 3. Build Scene Plan & Cost Preview
-    print(f"\n[3/6] Generating scene plan for {args.duration}s ({args.festival}, {args.aspect}, {args.resolution})...")
-    plan = plan_video_ad(
-        project=project,
-        renders=approved_renders,
-        requested_duration=args.duration,
-        festival=args.festival,
-        aspect=args.aspect,
-        resolution=args.resolution,
-    )
+    all_mode = str(args.duration).lower() == "all"
+    duration = 60 if all_mode else int(args.duration)
+    logo_ok = bool(args.logo and Path(args.logo).exists())
+    user_script = None
+    if args.script:
+        user_script = Path(args.script).read_text(encoding="utf-8").strip() if Path(args.script).is_file() else args.script.strip()
+        if all_mode:
+            print("  ⚠️ --script is ignored in 'all' mode (each length gets its own voiceover).")
+            user_script = None
 
-    print("\n" + "-" * 75)
-    print(f"{'Scene':<8} {'Type':<18} {'Sec':<6} {'Est. Cost':<12} {'Prompt Summary'}")
-    print("-" * 75)
-    for s in plan.scenes:
-        stype = "End Card" if s.source_type == "end_card" else ("Render (I2V)" if s.render_path else "Lifestyle (T2V)")
-        print(f"{s.index:<8} {stype:<18} {str(s.duration_seconds)+'s':<6} {f'${s.estimated_cost_usd:.2f}':<12} {s.prompt[:35]}...")
-    print("-" * 75)
-    print(f"Total AI Video Seconds: {plan.total_veo_seconds}s  |  Total Estimated Cost: ${plan.total_estimated_cost_usd:.2f}")
-    print(f"End Card Duration:      {plan.endcard_duration}s  |  Target Final Length:   {plan.final_duration:.1f}s")
-    print("-" * 75)
+    print(f"\n[3/6] Planning scenes for {'60 s + 20 s + 10 s' if all_mode else f'{duration}s'} "
+          f"({args.festival}, {args.aspect}, {args.resolution})...")
+    base = None
+    if args.agent:
+        base = plan_with_agent(project, approved_renders, duration, args.festival, args.aspect, args.resolution,
+                               script=user_script, logo_available=logo_ok)
+    if all_mode:
+        versions = plan_all_versions(project, approved_renders, args.festival, args.aspect, args.resolution,
+                                     logo_available=logo_ok, base_plan=base)
+    else:
+        versions = [base or plan_video_ad(project, approved_renders, duration, args.festival, args.aspect,
+                                          args.resolution, script=user_script, logo_available=logo_ok)]
+
+    if versions[0].blocked:
+        print(f"\n⛔ BLOCKED: {versions[0].blocked_reason}")
+        sys.exit(2)
+
+    for plan in versions:
+        print("\n" + "-" * 90)
+        print(f"{plan.requested_duration}s version – case {plan.case} – planner: {plan.planner}")
+        print("-" * 90)
+        for s in plan.scenes:
+            reuse = f" ↺60s#{s.reuses_scene_id}" if s.reuses_scene_id else ""
+            print(f"  {s.index:<3} {s.name[:52]:<52} {fmt_seconds(s.duration_seconds):<6} {s.label or '':<22}{reuse}")
+            if s.voiceover:
+                print(f"        🎙️ {s.voiceover}")
+        print(f"  End card: {' | '.join(plan.end_card.get('lines', []))}")
+        print(f"  New Veo seconds: {plan.total_veo_seconds}s | Est. cost: ${plan.total_estimated_cost_usd:.2f} "
+              f"| Voiceover: {plan.voiceover_word_count} words")
+        for w in plan.warnings:
+            print(f"  ⚠️ {w}")
+        for e in validate_plan(plan, approved_renders):
+            print(f"  ❌ Rule check: {e}")
+    if args.plan_json:
+        out = [v.to_dict() for v in versions]
+        Path(args.plan_json).write_text(json.dumps({"versions": out} if all_mode else out[0], indent=2, ensure_ascii=False))
+        print(f"\n  ✓ Scene plan JSON written to {args.plan_json}")
 
     if args.dry_run:
         print("\n🧪 [DRY RUN ACTIVE] Running assembly with simulation mode (no API charges)...")
 
-    # 4. Generate Veo Clips
-    print("\n[4/6] Producing video scenes (Veo 3.1 Fast / Simulation)...")
     veo = VeoClient(dry_run=args.dry_run)
-    clip_files = []
     cache_dir = Path("./cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
-
-    for s in plan.scenes:
-        if s.source_type == "end_card":
-            continue
-        print(f"  → Generating Scene {s.index} ({s.duration_seconds}s) [{s.name}]...")
-        dest = cache_dir / f"scene_{s.index}_{s.duration_seconds}s_{args.aspect.replace(':', '_')}.mp4"
-        clip_path = veo.generate_clip(
-            prompt=s.prompt,
-            duration=s.duration_seconds,
-            aspect=args.aspect,
-            resolution=args.resolution,
-            image_path=s.render_path,
-            output_dest=dest,
-        )
-        clip_files.append(clip_path)
-        print(f"    ✓ Scene {s.index} ready: {clip_path.name}")
-
-    # 5. Build End Card, Voiceover, and Music
-    print("\n[5/6] Building brand End Card, Indian-English voiceover, and background music...")
-    endcard_dest = cache_dir / f"endcard_{args.duration}s.mp4"
-    create_endcard_clip(
-        project=project,
-        duration=plan.endcard_duration,
-        logo_path=args.logo,
-        festival=args.festival,
-        aspect=args.aspect,
-        resolution=args.resolution,
-        output_path=endcard_dest,
-    )
-    print(f"  ✓ End Card rendered ({plan.endcard_duration}s)")
-
-    # Voiceover handling
-    voiceover_dest = None
-    if not args.no_voiceover:
-        if args.script:
-            if Path(args.script).is_file():
-                chosen_script = Path(args.script).read_text(encoding="utf-8").strip()
-            else:
-                chosen_script = args.script.strip()
-            print(f"  ✓ Using provided custom script ({len(chosen_script.split())} words)")
-        else:
-            print("  ✨ Generating 3 script options with Gemini...")
-            options = generate_script_options(
-                project=project,
-                festival=args.festival,
-                duration=args.duration,
-            )
-            for idx, opt in enumerate(options):
-                print(f"    [{idx+1}] {opt.title} ({opt.tone}) — {opt.word_count} words")
-            chosen_script = options[0].text
-            print(f"  ✓ Selected Option 1 (Recommended): \"{chosen_script}\"")
-
-        voiceover_dest = cache_dir / f"voiceover_{args.duration}s.mp3"
-        print("  🎙️ Synthesizing Indian-English voiceover (en-IN)...")
-        try:
-            generate_indian_voiceover(
-                script_text=chosen_script,
-                output_path=voiceover_dest,
-            )
-            print(f"  ✓ Voiceover audio track ready ({voiceover_dest.name})")
-        except Exception as e:
-            print(f"  ⚠️ Voiceover generation warning: {e}. Falling back to instrumental music only.")
-            voiceover_dest = None
-
-    music_dest = cache_dir / f"music_{args.duration}s.mp3"
-    build_music_track(
-        duration=args.duration,
-        festival=args.festival,
-        uploaded_music_path=args.music,
-        output_path=music_dest,
-    )
-    print(f"  ✓ Music track composed ({args.duration}s, 1s fade-in, 2s fade-out)")
-
-    # 6. Final Video Stitching & Overlays
     clean_pname = project.name.replace(" ", "_").lower()
     clean_fest = args.festival.replace("/", "_").lower()
     clean_aspect = args.aspect.replace(":", "_")
-    final_output = Path(args.output or f"output/{clean_pname}_{clean_fest}_{args.duration}s_{clean_aspect}.mp4")
 
-    print(f"\n[6/6] Stitching crossfades, ducking music under voiceover, burning RERA bar -> {final_output}...")
-    out_file, checks = assemble_final_video(
-        plan=plan,
-        project=project,
-        clip_paths=clip_files,
-        endcard_path=endcard_dest,
-        music_path=music_dest,
-        output_path=final_output,
-        voiceover_path=voiceover_dest,
-    )
+    for plan in versions:
+        dur = plan.requested_duration
+        # 4. Veo clips (cached by prompt + render + length, so shorter versions reuse the 60 s clips)
+        print(f"\n[4/6] {dur}s: producing video scenes (Veo 3.1 Fast / Simulation)...")
+        clip_files = []
+        for s in plan.veo_scenes:
+            dest = cache_dir / f"scene_{dur}s_{s.index}_{s.veo_duration}s_{clean_aspect}.mp4"
+            clip_files.append(veo.generate_clip(
+                prompt=s.prompt, duration=s.veo_duration, aspect=args.aspect,
+                resolution=args.resolution, image_path=s.render_path, output_dest=dest,
+            ))
+            print(f"    ✓ Scene {s.index} ({s.veo_mode}) ready")
 
-    print("\n" + "=" * 65)
-    print("🎉 VIDEO EXPORT COMPLETE & VERIFIED!")
-    print("=" * 65)
-    print(f"  • Output File:       {out_file.resolve()}")
-    print(f"  • Video Duration:    {checks['actual_duration']}s (Requested: {args.duration}s | Status: {'✓ PASS' if checks['duration_passed'] else '⚠️'})")
-    print(f"  • Audio Track:       {'Indian-English Voiceover + Ducked Festive Music' if voiceover_dest else 'Festive Instrumental Music'}")
-    print(f"  • RERA Bar Check:    {'✓ Present on every frame' if checks['rera_bar_verified'] else '⚠️ Verification warning'}")
-    print(f"  • Frames Inspected:  {checks['frames_checked']} frames verified")
-    print(f"  • Estimated Cost:    ${plan.total_estimated_cost_usd:.2f}")
-    print("=" * 65 + "\n")
+        # 5. End card, voiceover, music
+        print(f"[5/6] {dur}s: end card, voiceover and music...")
+        endcard_dest = cache_dir / f"endcard_{dur}s.mp4"
+        create_endcard_clip(project=project, duration=plan.endcard_duration, logo_path=args.logo,
+                            festival=args.festival, aspect=args.aspect, resolution=args.resolution,
+                            output_path=endcard_dest, card=plan.end_card)
+        voiceover_dest = None
+        if not args.no_voiceover and plan.voiceover_script:
+            voiceover_dest = cache_dir / f"voiceover_{dur}s.mp3"
+            try:
+                generate_indian_voiceover(script_text=plan.voiceover_script, output_path=voiceover_dest)
+            except Exception as e:
+                print(f"  ⚠️ Voiceover generation warning: {e}. Falling back to music only.")
+                voiceover_dest = None
+        music_dest = cache_dir / f"music_{dur}s.mp3"
+        build_music_track(duration=dur, festival=args.festival, uploaded_music_path=args.music,
+                          output_path=music_dest, music_prompt=plan.music_prompt)
+
+        # 6. Stitch & overlays
+        if args.output and not all_mode:
+            final_output = Path(args.output)
+        else:
+            final_output = Path(f"output/{clean_pname}_{clean_fest}_{dur}s_{clean_aspect}.mp4")
+        print(f"[6/6] {dur}s: stitching, labels, RERA bar -> {final_output}...")
+        out_file, checks = assemble_final_video(
+            plan=plan, project=project, clip_paths=clip_files, endcard_path=endcard_dest,
+            music_path=music_dest, output_path=final_output, voiceover_path=voiceover_dest,
+        )
+        print(f"  🎉 {out_file.resolve()}")
+        print(f"     Duration {checks['actual_duration']}s (requested {dur}s: "
+              f"{'✓ PASS' if checks['duration_passed'] else '⚠️'}) | RERA frames: {checks['frames_checked']} "
+              f"| Est. cost ${plan.total_estimated_cost_usd:.2f}")
 
 
 if __name__ == "__main__":

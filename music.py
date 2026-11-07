@@ -31,12 +31,16 @@ def build_music_track(
     uploaded_music_path: Optional[str] = None,
     output_path: Optional[Path] = None,
     api_key: Optional[str] = None,
+    music_track: Optional[str] = None,
+    music_prompt: Optional[str] = None,
 ) -> Path:
     """
     Produce a clean, continuous audio track for the video duration.
     Fades in 1 second, fades out 2 seconds.
+    Supports music_track="sitar", "piano", or custom path.
     """
-    out_file = output_path or Path(f"./cache/music_{duration}s_{festival.lower()}.mp3")
+    clean_tag = (music_track or festival).replace("/", "_").lower()
+    out_file = output_path or Path(f"./cache/music_{duration}s_{clean_tag}.mp3")
     out_file.parent.mkdir(parents=True, exist_ok=True)
 
     raw_audio_temp = out_file.parent / f"raw_temp_{out_file.stem}.wav"
@@ -45,10 +49,26 @@ def build_music_track(
         # User uploaded music: Loop and trim
         _process_custom_audio(Path(uploaded_music_path), raw_audio_temp, duration)
     else:
-        # Generate Indian festive instrumental
-        success = _try_generate_lyria(duration, festival, raw_audio_temp, api_key)
-        if not success or not raw_audio_temp.exists():
-            _synthesize_festive_acoustic_bed(duration, festival, raw_audio_temp)
+        # Check for bundled studio acoustic tracks first
+        studio_track = None
+        assets_dir = Path("assets/music")
+
+        if music_track == "sitar" or (not music_track and festival not in ("None", "Family")):
+            candidate = assets_dir / "festive_indian.mp3"
+            if candidate.exists():
+                studio_track = candidate
+        elif music_track == "piano" or (not music_track and festival in ("None", "Family")):
+            candidate = assets_dir / "luxury_ambient.mp3"
+            if candidate.exists():
+                studio_track = candidate
+
+        if studio_track and studio_track.exists():
+            _process_custom_audio(studio_track, raw_audio_temp, duration)
+        else:
+            # Fallback to Lyria API or synthesis
+            success = _try_generate_lyria(duration, festival, raw_audio_temp, api_key, music_prompt)
+            if not success or not raw_audio_temp.exists():
+                _synthesize_festive_acoustic_bed(duration, festival, raw_audio_temp)
 
     # Apply 1s fade-in and 2s fade-out via FFmpeg
     fade_out_start = max(0, duration - 2)
@@ -87,13 +107,14 @@ def _try_generate_lyria(
     festival: str,
     output_file: Path,
     api_key: Optional[str] = None,
+    music_prompt: Optional[str] = None,
 ) -> bool:
     """Attempt Google Gemini Lyria model call if available."""
     key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not key or key.startswith("your_"):
         return False
 
-    prompt = (
+    prompt = music_prompt or (
         f"Joyful Indian festive instrumental for {festival}: shehnai and sitar melody, "
         f"tabla and soft dholak rhythm, light temple bells, warm and celebratory, no vocals, "
         f"{duration} seconds, gentle ending."

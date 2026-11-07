@@ -6,7 +6,9 @@ Generates the non-AI final title/brand card conforming to Section 6:
   - Uploaded logo centred in upper half, fades in
   - Project name in heading font, brand secondary colour (#D4AF37)
   - "by {promoter}" in body font
-  - "{available unit types} Homes from {lowest price}* | {marketing_name}, {city}"
+  - Lines come from the scene plan's end card (main selling line with fallbacks,
+    location, CTA); "by {promoter}" is skipped when the promoter is missing
+  - No logo -> the project name is shown in large text
   - "Happy {festival}!" (skipped if festival is None)
   - Downloads Google Fonts if missing, falls back to DejaVu / System fonts
 """
@@ -17,7 +19,7 @@ import os
 import subprocess
 import urllib.request
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
@@ -78,6 +80,7 @@ def render_endcard_image(
     festival: str = "Diwali",
     aspect: str = "16:9",
     resolution: str = "1080p",
+    card: Optional[Dict[str, Any]] = None,
 ) -> Image.Image:
     """
     Render static high-resolution end card image with Pillow.
@@ -86,18 +89,31 @@ def render_endcard_image(
     if resolution == "720p":
         width, height = (1280, 720) if aspect == "16:9" else (720, 1280)
 
-    # Background: Brand primary colour
-    bg_color_hex = project.brand.primary_colour or "#1F2A44"
-    try:
-        bg_color = ImageColor.getrgb(bg_color_hex)
-    except Exception:
-        bg_color = (31, 42, 68)
+    # Background: Minimalist clean off-white for Diwali, brand primary colour for others
+    is_diwali = festival == "Diwali"
+    if is_diwali:
+        bg_color = (250, 249, 246)  # Clean off-white background
+        border_color = (212, 175, 55)  # Polished gold border
+        tagline_color = "#996515"
+        title_color = "#B8860B"
+        promoter_color = "#4B5563"
+        offer_color = "#1F2937"
+    else:
+        bg_color_hex = project.brand.primary_colour or "#1F2A44"
+        try:
+            bg_color = ImageColor.getrgb(bg_color_hex)
+        except Exception:
+            bg_color = (31, 42, 68)
+        border_color = project.brand.secondary_colour or "#C9A227"
+        tagline_color = "#F3E5AB"
+        title_color = project.brand.secondary_colour or "#C9A227"
+        promoter_color = "#E5E7EB"
+        offer_color = "#FFFFFF"
 
     img = Image.new("RGBA", (width, height), bg_color)
     draw = ImageDraw.Draw(img)
 
     # Decorative warm border
-    border_color = project.brand.secondary_colour or "#D4AF37"
     border_margin = int(width * 0.035)
     border_thickness = max(2, int(width * 0.002))
     draw.rectangle(
@@ -123,64 +139,44 @@ def render_endcard_image(
         except Exception:
             y_cursor += int(height * 0.05)
     else:
-        y_cursor += int(height * 0.06)
+        y_cursor = int(height * 0.32)   # no logo: centre the text block
 
-    # 2. Festive Greeting (skip if festival is None)
-    if festival and festival != "None":
-        festive_font = _get_font(project.brand.heading_font, int(height * 0.038))
-        greeting = f"Happy {festival}!"
-        draw.text(
-            (width // 2, y_cursor),
-            greeting,
-            font=festive_font,
-            fill="#F3E5AB",
-            anchor="mm",
-        )
-        y_cursor += int(height * 0.065)
+    card = card or {}
+    has_logo = bool(logo_path and Path(logo_path).exists())
+    greeting = card.get("greeting_line", f"Happy {festival}!" if festival not in ("None", "Family") else "")
+    promoter_line = card.get("promoter_line", f"by {project.promoter}" if project.promoter else "")
+    offer_line = card.get("offer_line", "")
+    location = card.get("location_line", "")
+    cta = card.get("cta_line", "")
+    if not card:
+        units_str = project.formatted_units_summary
+        location = f"{project.marketing_name}, {project.city}" if project.marketing_name else project.city
+        if project.lowest_price_inr:
+            offer_line = f"{units_str} Homes from {project.formatted_lowest_price}*"
+        elif project.available_units:
+            offer_line = f"Spacious {units_str} Homes"
 
-    # 3. Project Name in Heading Font (brand secondary colour)
-    title_font_size = int(height * 0.062) if aspect == "16:9" else int(height * 0.045)
-    title_font = _get_font(project.brand.heading_font, title_font_size)
-    project_title = project.name.upper()
-    title_color = project.brand.secondary_colour or "#D4AF37"
-    draw.text(
-        (width // 2, y_cursor),
-        project_title,
-        font=title_font,
-        fill=title_color,
-        anchor="mm",
-    )
-    y_cursor += int(height * 0.055)
+    def _line(text: str, size: float, font_name: str, colour: Any, gap: float) -> None:
+        nonlocal y_cursor
+        if not text:
+            return
+        draw.text((width // 2, y_cursor), text, font=_get_font(font_name, int(height * size)),
+                  fill=colour, anchor="mm")
+        y_cursor += int(height * gap)
 
-    # 4. "by {promoter}" in body font
-    body_font_size = int(height * 0.030) if aspect == "16:9" else int(height * 0.024)
-    body_font = _get_font(project.brand.body_font, body_font_size)
-    promoter_text = f"by {project.promoter}"
-    draw.text(
-        (width // 2, y_cursor),
-        promoter_text,
-        font=body_font,
-        fill="#E5E7EB",
-        anchor="mm",
-    )
-    y_cursor += int(height * 0.065)
-
-    # 5. Units, Price & Location
-    # "{available unit types} Homes from {lowest price}* | {marketing_name}, {city}"
-    units_str = project.formatted_units_summary
-    price_str = project.formatted_lowest_price
-    loc_part = f"{project.marketing_name}, {project.city}" if project.marketing_name else project.city
-    offer_line = f"{units_str} Homes from {price_str}* | {loc_part}"
-
-    offer_font_size = int(height * 0.032) if aspect == "16:9" else int(height * 0.025)
-    offer_font = _get_font(project.brand.body_font, offer_font_size)
-    draw.text(
-        (width // 2, y_cursor),
-        offer_line,
-        font=offer_font,
-        fill="#FFFFFF",
-        anchor="mm",
-    )
+    vertical = aspect != "16:9"
+    # 2. Greeting
+    _line(greeting, 0.032 if vertical else 0.038, project.brand.heading_font, tagline_color, 0.065)
+    # 3. Project name (large when there is no logo)
+    name_size = (0.06 if vertical else 0.09) if not has_logo else (0.045 if vertical else 0.062)
+    _line(project.name.upper(), name_size, project.brand.heading_font, title_color,
+          0.075 if not has_logo else 0.055)
+    # 4. "by {promoter}" (omitted when promoter is missing)
+    _line(promoter_line, 0.024 if vertical else 0.030, project.brand.body_font, promoter_color, 0.065)
+    # 5. Selling line, location, CTA
+    _line(offer_line, 0.025 if vertical else 0.032, project.brand.body_font, offer_color, 0.052)
+    _line(location, 0.022 if vertical else 0.027, project.brand.body_font, promoter_color, 0.05)
+    _line(cta, 0.022 if vertical else 0.027, project.brand.body_font, tagline_color, 0.05)
 
     return img.convert("RGB")
 
@@ -193,6 +189,7 @@ def create_endcard_clip(
     aspect: str = "16:9",
     resolution: str = "1080p",
     output_path: Optional[Path] = None,
+    card: Optional[Dict[str, Any]] = None,
 ) -> Path:
     """
     Generate end card video file using Pillow image and FFmpeg (with gentle fade-in).
@@ -206,6 +203,7 @@ def create_endcard_clip(
         festival=festival,
         aspect=aspect,
         resolution=resolution,
+        card=card,
     )
 
     temp_img_path = out_file.parent / f"temp_{out_file.stem}.png"

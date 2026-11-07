@@ -21,6 +21,7 @@ class RenderInfo:
     approved: bool = True
     needs_review: bool = False
     notes: str = ""
+    description: str = ""              # What the image shows (sent to the scene planner)
 
     @property
     def path(self) -> Path:
@@ -29,6 +30,9 @@ class RenderInfo:
     @property
     def filename(self) -> str:
         return self.path.name
+
+
+DEFAULT_DISCLAIMER = "All images are artist's impressions. T&C apply."
 
 
 def is_valid_content(val: Any) -> bool:
@@ -78,9 +82,9 @@ class SiteVisitInfo:
 
 @dataclass
 class BrandConfig:
-    primary_colour: str = "#1F2A44"    # Fallback dark navy
-    secondary_colour: str = "#D4AF37"  # Fallback warm gold
-    background_colour: str = "#FFFFFF"
+    primary_colour: str = "#1F2A44"    # Fallback navy
+    secondary_colour: str = "#C9A227"  # Fallback gold
+    background_colour: str = "#F3EFE6" # Fallback cream
     heading_font: str = "Playfair Display"
     body_font: str = "Inter"
 
@@ -97,12 +101,21 @@ class ProjectData:
     available_units: List[str] = field(default_factory=list)
     lowest_price_inr: Optional[int] = None
     travel_times: List[str] = field(default_factory=list)
+    amenities: List[str] = field(default_factory=list)
     site_visits: SiteVisitInfo = field(default_factory=SiteVisitInfo)
     marketing_phone: str = ""
     brand: BrandConfig = field(default_factory=BrandConfig)
     disclaimers: List[str] = field(default_factory=list)
     extra_charges: List[str] = field(default_factory=list)
     raw_data: Dict[str, Any] = field(default_factory=dict)
+    # Extra facts used by the scene planner's fallback chain
+    max_carpet_sqft: Optional[int] = None
+    possession: str = ""                # e.g. "Dec 2027"
+    open_space_pct_min: Optional[float] = None
+    land_area_acres: Optional[float] = None
+    units_status_missing: bool = False  # some units had no "status" field
+    all_units_sold_out: bool = False    # units listed, none available
+    missing_fields: List[str] = field(default_factory=list)
 
     @property
     def is_verified(self) -> bool:
@@ -162,17 +175,27 @@ def parse_project_json(data: Dict[str, Any] | str | Path) -> ProjectData:
         raise TypeError("Expected dict, Path, or str for project JSON")
 
     # 1. Project identity
-    proj_block = raw.get("project", {})
-    name = proj_block.get("name") or raw.get("name") or "Residential Project"
+    missing: List[str] = []
+    proj_block = raw.get("project", {}) or {}
+    name_raw = proj_block.get("name") or raw.get("name") or ""
+    name = str(name_raw).strip() if is_valid_content(name_raw) else ""
+    if not name:
+        missing.append("project.name")
     promoter_raw = proj_block.get("promoter") or proj_block.get("developer") or raw.get("promoter") or ""
     promoter = promoter_raw if is_valid_content(promoter_raw) else ""
+    if not promoter:
+        missing.append("promoter")
 
     # 2. Location
-    loc_block = raw.get("location", {})
+    loc_block = raw.get("location", {}) or {}
     mkt_raw = loc_block.get("marketing_name") or loc_block.get("address") or loc_block.get("locality") or ""
     marketing_name = mkt_raw if is_valid_content(mkt_raw) else ""
+    if not marketing_name:
+        missing.append("location.marketing_name")
     city_raw = loc_block.get("city") or ""
     city = city_raw if is_valid_content(city_raw) else ""
+    if not city:
+        missing.append("location.city")
 
     raw_travel = loc_block.get("travel_times", [])
     travel_times: List[str] = []
@@ -189,18 +212,24 @@ def parse_project_json(data: Dict[str, Any] | str | Path) -> ProjectData:
                 travel_times.append(item.strip())
 
     travel_times = [t for t in travel_times if is_valid_content(t)]
+    if not travel_times:
+        missing.append("location.travel_times")
 
     # Site visits & Contacts
-    sv_block = raw.get("site_visits", {})
+    sv_block = raw.get("site_visits", {}) or {}
     site_visit_obj = SiteVisitInfo(
         days=str(sv_block.get("days", "")).strip(),
         start=str(sv_block.get("start", "")).strip(),
         end=str(sv_block.get("end", "")).strip(),
     )
-    contacts_block = raw.get("contacts", {})
-    mkt_contact = contacts_block.get("marketing", {})
-    phone_raw = (mkt_contact.get("phone") or contacts_block.get("phone") or "").strip()
+    if not site_visit_obj.formatted_text:
+        missing.append("site_visits")
+    contacts_block = raw.get("contacts", {}) or {}
+    mkt_contact = contacts_block.get("marketing", {}) or {}
+    phone_raw = str(mkt_contact.get("phone") or contacts_block.get("phone") or "").strip()
     marketing_phone = phone_raw if is_valid_content(phone_raw) else ""
+    if not marketing_phone:
+        missing.append("contacts.marketing.phone")
 
     # 3. RERA (REQUIRED - Refuse to generate if missing or empty)
     rera_block = raw.get("rera", {})
@@ -221,12 +250,22 @@ def parse_project_json(data: Dict[str, Any] | str | Path) -> ProjectData:
     rera_number = str(rera_num).strip()
 
     # 4. Units & Pricing
-    units_list = raw.get("units", [])
+    units_list = raw.get("units", []) or []
     available_units: List[str] = []
     prices: List[int] = []
+    carpets: List[int] = []
+    units_status_missing = False
 
     for u in units_list:
-        status = str(u.get("status", "available")).lower()
+        if not isinstance(u, dict):
+            continue
+        raw_status = u.get("status")
+        if not is_valid_content(raw_status):
+            # Status not given: still mention the unit type, but warn the user.
+            units_status_missing = True
+            status = "available"
+        else:
+            status = str(raw_status).lower()
         if status in ("available", "open", "active", "for_sale"):
             utype = u.get("type") or u.get("type_name") or u.get("name")
             if utype and utype not in available_units:
@@ -237,25 +276,85 @@ def parse_project_json(data: Dict[str, Any] | str | Path) -> ProjectData:
                     prices.append(int(p_min))
                 except (ValueError, TypeError):
                     pass
+            c_sqft = u.get("carpet_sqft") or u.get("carpet_area_sqft")
+            if c_sqft:
+                try:
+                    carpets.append(int(float(c_sqft)))
+                except (ValueError, TypeError):
+                    pass
 
     lowest_price_inr = min(prices) if prices else None
+    max_carpet_sqft = max(carpets) if carpets else None
+    all_units_sold_out = bool(units_list) and not available_units
+    if not units_list:
+        missing.append("units")
+    if lowest_price_inr is None:
+        missing.append("units[].price_min_inr")
+    if available_units and max_carpet_sqft is None:
+        missing.append("units[].carpet_sqft")
 
-    # 5. Brand styles
-    brand_raw = raw.get("brand", {})
+    # Amenities (optional list of amenities)
+    raw_amenities = raw.get("amenities") or raw.get("amenity_list") or proj_block.get("amenities") or []
+    if isinstance(raw_amenities, list):
+        amenities = [str(a).strip() for a in raw_amenities if is_valid_content(str(a))]
+    else:
+        amenities = []
+    if not amenities:
+        missing.append("amenities")
+
+    # Possession / open space / land area (optional facts for the fallback chain)
+    cs_block = raw.get("construction_status") if isinstance(raw.get("construction_status"), dict) else {}
+    possession_raw = (
+        raw.get("possession") or proj_block.get("possession")
+        or cs_block.get("possession") or cs_block.get("possession_date") or ""
+    )
+    if isinstance(possession_raw, dict):
+        possession_raw = possession_raw.get("date") or possession_raw.get("expected") or ""
+    possession = str(possession_raw).strip() if is_valid_content(possession_raw) else ""
+    if not possession:
+        missing.append("possession")
+
+    def _num(*vals: Any) -> Optional[float]:
+        for v in vals:
+            if v is None or v == "":
+                continue
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                continue
+        return None
+
+    land_block = raw.get("land") if isinstance(raw.get("land"), dict) else {}
+    open_space_pct_min = _num(
+        raw.get("open_space_pct_min"), proj_block.get("open_space_pct_min"), land_block.get("open_space_pct_min"),
+    )
+    land_area_acres = _num(
+        raw.get("land_area_acres"), proj_block.get("land_area_acres"), land_block.get("land_area_acres"),
+    )
+
+    # 5. Brand styles (fallback: navy #1F2A44, gold #C9A227, cream #F3EFE6; Playfair Display / Inter)
+    brand_raw = raw.get("brand", {}) or {}
     colours = brand_raw.get("colours") or brand_raw.get("colors") or {}
     fonts = brand_raw.get("fonts") or {}
+    if not colours:
+        missing.append("brand.colours")
+    if not fonts:
+        missing.append("brand.fonts")
 
     brand = BrandConfig(
-        primary_colour=colours.get("primary", "#1F2A44"),
-        secondary_colour=colours.get("secondary", "#D4AF37"),
-        background_colour=colours.get("background", "#FFFFFF"),
-        heading_font=fonts.get("heading", "Playfair Display"),
-        body_font=fonts.get("body", "Inter"),
+        primary_colour=colours.get("primary") or "#1F2A44",
+        secondary_colour=colours.get("secondary") or "#C9A227",
+        background_colour=colours.get("background") or "#F3EFE6",
+        heading_font=fonts.get("heading") or "Playfair Display",
+        body_font=fonts.get("body") or "Inter",
     )
 
     # 6. Disclaimers & Pricing extras
-    disclaimers = raw.get("disclaimers") or []
-    pricing_block = raw.get("pricing", {})
+    disclaimers = [d for d in (raw.get("disclaimers") or []) if is_valid_content(d)]
+    if not disclaimers:
+        missing.append("disclaimers")
+        disclaimers = [DEFAULT_DISCLAIMER]
+    pricing_block = raw.get("pricing", {}) or {}
     extra_charges = pricing_block.get("extra_charges") or []
 
     # 7. Status & verification
@@ -273,12 +372,20 @@ def parse_project_json(data: Dict[str, Any] | str | Path) -> ProjectData:
         available_units=available_units,
         lowest_price_inr=lowest_price_inr,
         travel_times=travel_times,
+        amenities=amenities,
         site_visits=site_visit_obj,
         marketing_phone=marketing_phone,
         brand=brand,
         disclaimers=disclaimers,
         extra_charges=extra_charges,
         raw_data=raw,
+        max_carpet_sqft=max_carpet_sqft,
+        possession=possession,
+        open_space_pct_min=open_space_pct_min,
+        land_area_acres=land_area_acres,
+        units_status_missing=units_status_missing,
+        all_units_sold_out=all_units_sold_out,
+        missing_fields=missing,
     )
 
 
@@ -295,7 +402,7 @@ def filter_approved_renders(
 
     for r in renders:
         # Check explicit approval
-        if not r.approved:
+        if not r.approved or r.needs_review:
             continue
 
         # Check review dict from project JSON if present

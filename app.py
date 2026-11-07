@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -23,7 +24,7 @@ from project_data import (
     filter_approved_renders,
     parse_project_json,
 )
-from planner import AdPlan, plan_video_ad
+from planner import AdPlan, fmt_seconds, plan_all_versions, plan_video_ad, plan_with_agent, validate_plan
 from veo_client import VeoClient
 from music import build_music_track
 from endcard import create_endcard_clip
@@ -123,6 +124,13 @@ with st.sidebar:
         help="Generates test assembly locally using FFmpeg motion zooms (0 cost).",
     )
 
+    use_scene_agent = st.checkbox(
+        "🤖 Plan scenes with Gemini agent",
+        value=False,
+        help="Sends the scene-planner system prompt to Gemini. Its plan is checked against the rules; "
+             "if it breaks any rule the built-in rule engine is used instead.",
+    )
+
     st.divider()
     st.markdown("### 📖 About This App")
     st.caption(
@@ -150,6 +158,20 @@ st.markdown("""
 # Section 1: Campaign Configuration Form
 # ─────────────────────────────────────────────
 
+st.markdown("### 🎨 Choose Video Ad Campaign Template")
+template_choice = st.radio(
+    "Ad Template",
+    options=["🪔 Indian Festival Ad", "🏢 Standard Luxury Ad", "👨‍👩‍👧‍👦 Family Living & Community Ad"],
+    index=0,
+    horizontal=True,
+    help="Select 'Indian Festival' for cultural celebrations like Diwali, 'Standard' for modern architectural luxury, or 'Family Living' for wholesome community lifestyle.",
+    label_visibility="collapsed",
+    key="campaign_template_choice",
+)
+
+is_festival_template = "Indian Festival" in template_choice
+is_family_template = "Family Living" in template_choice
+
 col_cfg1, col_cfg2 = st.columns([1, 1], gap="medium")
 
 with col_cfg1:
@@ -158,21 +180,34 @@ with col_cfg1:
         "⏱️ Video Length (seconds)",
         min_value=10,
         max_value=60,
-        value=30,
+        value=10,
         step=1,
-        help="Allowed 10–60 seconds. Default: 30 seconds.",
+        help="Allowed 10–60 seconds. Default: 10 seconds (~₹62 at 720p).",
+    )
+    make_all_versions = st.checkbox(
+        "🎞️ Make all three versions (60 s, 20 s, 10 s)",
+        value=False,
+        help="Plans the 60 s video first and cuts the 20 s and 10 s versions from the same clips, "
+             "so Veo is paid for only once.",
     )
 
-    festival_list = [
-        "Diwali", "Ugadi", "Dussehra", "Ganesh Chaturthi", "Onam",
-        "Pongal/Sankranti", "Christmas", "Eid", "New Year", "None"
-    ]
-    selected_festival = st.selectbox(
-        "🎉 Festival Celebration Theme",
-        options=festival_list,
-        index=0,
-        help="'None' generates a modern non-festive architectural ad in soft golden-hour light.",
-    )
+    if is_festival_template:
+        festival_list = [
+            "Diwali", "Ugadi", "Dussehra", "Ganesh Chaturthi", "Onam",
+            "Pongal/Sankranti", "Christmas", "Eid", "New Year"
+        ]
+        selected_festival = st.selectbox(
+            "🎉 Festival Celebration Theme",
+            options=festival_list,
+            index=0,
+            help="Select the Indian festival to tailor visual decor, music, and voiceover copy.",
+        )
+    elif is_family_template:
+        selected_festival = "Family"
+        st.info("👨‍👩‍👧‍👦 **Family Living Theme Active:** Heartwarming family lifestyle, vibrant green parks, kids play zones, safe community living, and multi-generational comfort.")
+    else:
+        selected_festival = "None"
+        st.info("🏢 **Standard Template Active:** Clean architectural drone shots, luxury ambient score, executive typography, and pricing highlights without festival decor.")
 
 with col_cfg2:
     st.markdown("#### 2. Format & Resolution")
@@ -187,12 +222,12 @@ with col_cfg2:
     with col_sub2:
         resolution = st.selectbox(
             "🖥️ Video Resolution",
-            options=["1080p", "720p"],
+            options=["720p", "1080p"],
             index=0,
-            help="1080p (Full HD, $1.20/10s) or 720p (HD, $0.90/10s).",
+            help="720p (HD, $0.09/sec ~₹62/10s) or 1080p (Full HD, $0.12/sec ~₹83/10s).",
         )
 
-    st.caption("Pricing: **1080p** = $0.12/sec  |  **720p** = $0.09/sec  |  **End Card** = $0.00 (Local Pillow)")
+    st.caption("Pricing: **720p** = $0.09/sec (~₹62/10s)  |  **1080p** = $0.12/sec (~₹83/10s)  |  **End Card** = $0.00 (Local Pillow)")
 
 
 # ─────────────────────────────────────────────
@@ -313,11 +348,14 @@ if uploaded_render_files:
                 key=f"rtype_{idx}",
             )
             is_approved = st.checkbox("Approved for ads", value=True, key=f"appr_{idx}")
+            r_desc = st.text_input("What it shows", value="", key=f"rdesc_{idx}",
+                                   placeholder="e.g. 3 towers at dusk")
 
             active_renders.append(RenderInfo(
                 filepath=str(r_dest),
                 render_type=r_type,
                 approved=is_approved,
+                description=r_desc,
             ))
 
 
@@ -328,7 +366,7 @@ if uploaded_render_files:
 if project_data_obj:
     st.divider()
     status_class = "status-verified" if project_data_obj.is_verified else "status-draft"
-    status_label = "VERIFIED PROJECT" if project_data_obj.is_verified else "DRAFT (WATERMARK APPLIED)"
+    status_label = "VERIFIED PROJECT" if project_data_obj.is_verified else "UNVERIFIED PROJECT"
 
     st.markdown(f"""
     <div class="card-box">
@@ -384,6 +422,7 @@ if project_data_obj:
             st.session_state["script_cache_key"] = cache_key
             st.session_state["selected_script_idx"] = 0
             st.session_state["approved_script"] = st.session_state["script_options"][0].text
+            st.session_state["script_text_input"] = st.session_state["script_options"][0].text
             st.session_state["preview_vo_path"] = None
 
     script_opts = st.session_state.get("script_options", [])
@@ -408,10 +447,32 @@ if project_data_obj:
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 
     def _on_script_select():
-        chosen_idx = st.session_state.get("script_radio_choice", 0)
+        raw_choice = st.session_state.get("script_radio_choice", 0)
+        try:
+            chosen_idx = int(raw_choice)
+        except (ValueError, TypeError):
+            chosen_idx = 0
+
+        if not (0 <= chosen_idx < len(script_opts)):
+            chosen_idx = 0
+
         st.session_state["selected_script_idx"] = chosen_idx
-        st.session_state["approved_script"] = script_opts[chosen_idx].text
+        st.session_state["script_radio_choice"] = chosen_idx
+        chosen_text = script_opts[chosen_idx].text if script_opts else ""
+        st.session_state["approved_script"] = chosen_text
+        st.session_state["script_text_input"] = chosen_text
         st.session_state["preview_vo_path"] = None
+
+    # Ensure selected index and radio state are safe integers within bounds
+    try:
+        current_script_idx = int(st.session_state.get("selected_script_idx", 0))
+    except (ValueError, TypeError):
+        current_script_idx = 0
+    if not (0 <= current_script_idx < len(script_opts)):
+        current_script_idx = 0
+    st.session_state["selected_script_idx"] = current_script_idx
+    if "script_radio_choice" in st.session_state and not isinstance(st.session_state["script_radio_choice"], int):
+        st.session_state["script_radio_choice"] = current_script_idx
 
     col_pick, col_regen = st.columns([3, 1], gap="small")
     with col_pick:
@@ -419,7 +480,7 @@ if project_data_obj:
             "Select a script option to approve & customize:",
             options=list(range(len(script_opts))),
             format_func=lambda idx: f"Option {idx+1}: {script_opts[idx].title} ({script_opts[idx].tone})",
-            index=st.session_state.get("selected_script_idx", 0),
+            index=current_script_idx,
             key="script_radio_choice",
             on_change=_on_script_select,
             horizontal=True,
@@ -436,15 +497,18 @@ if project_data_obj:
                     api_key=effective_key,
                 )
                 st.session_state["selected_script_idx"] = 0
-                st.session_state["approved_script"] = st.session_state["script_options"][0].text
+                first_text = st.session_state["script_options"][0].text
+                st.session_state["approved_script"] = first_text
+                st.session_state["script_text_input"] = first_text
                 st.session_state["preview_vo_path"] = None
                 st.rerun()
 
     # Editable Text Area for Live Modification
-    curr_script_val = st.session_state.get("approved_script", script_opts[0].text if script_opts else "")
+    if "script_text_input" not in st.session_state or not st.session_state["script_text_input"]:
+        st.session_state["script_text_input"] = script_opts[0].text if script_opts else ""
+
     edited_script = st.text_area(
         "✏️ Approve & Edit Voiceover Script (Live on web page):",
-        value=curr_script_val,
         height=110,
         help="Feel free to edit words, pricing, or emphasis. This exact text will be spoken in the Indian-English voiceover.",
         key="script_text_input",
@@ -457,7 +521,7 @@ if project_data_obj:
     word_count = len(edited_script.strip().split()) if edited_script.strip() else 0
     est_speech_time = round(word_count / 2.25, 1)
 
-    s_col1, s_col2, s_col3 = st.columns([1.5, 2.2, 2.3])
+    s_col1, s_col2 = st.columns([1.5, 3.5])
     with s_col1:
         st.caption(f"📝 **{word_count} words** (~{est_speech_time:.1f}s speech)")
     with s_col2:
@@ -466,25 +530,146 @@ if project_data_obj:
         else:
             st.caption(f"✅ Perfectly timed for {video_length}s ad ({est_speech_time:.1f}s in {speaking_window:.1f}s window).")
 
-    with s_col3:
-        btn_vo = st.button("🎧 Synthesize & Preview Voiceover (en-IN)", use_container_width=True)
+    # ─────────────────────────────────────────────
+    # Audio & Soundtrack Customization Controls
+    # ─────────────────────────────────────────────
+    st.markdown("#### 🎚️ Choose Voice & Background Music")
+    a_col1, a_col2, a_col3 = st.columns([1.4, 1.8, 1.0])
 
-    if btn_vo and edited_script.strip():
-        with st.spinner("Synthesizing Indian-English voiceover (en-IN neural)..."):
-            preview_vo_file = Path(tempfile.gettempdir()) / f"vo_preview_{video_length}s.mp3"
+    with a_col1:
+        voice_choice = st.selectbox(
+            "🎙️ Voiceover Actor",
+            options=[
+                "👩 Neerja (Female — Warm & Elegant)",
+                "👨 Prabhat (Male — Deep & Authoritative)",
+                "🚫 None (Instrumental Music Only)",
+            ],
+            index=0,
+            help="Select the AI voice actor for your voiceover narration.",
+            key="voice_actor_select",
+        )
+
+    with a_col2:
+        default_music_idx = 0 if is_festival_template else 1
+        music_choice = st.selectbox(
+            "🎵 Background Soundtrack",
+            options=[
+                "🪔 Pure Sitar & Tanpura (Authentic Classical Raga — Zero Vocals)",
+                "🎹 Neoclassical Ambient Piano & Strings (Modern Luxury)",
+                "📁 Custom Uploaded Audio Track",
+            ],
+            index=default_music_idx,
+            help="Select the musical soundtrack style for your video ad.",
+            key="soundtrack_style_select",
+        )
+
+    with a_col3:
+        music_volume = st.slider(
+            "🎚️ Music Volume",
+            min_value=10,
+            max_value=40,
+            value=20,
+            step=5,
+            format="%d%%",
+            help="Music volume level under voiceover. Default: 20%.",
+            key="music_vol_slider",
+        )
+
+    # Audio Preview Action Buttons
+    prev_col1, prev_col2, prev_col3 = st.columns(3)
+    btn_prev_vo = prev_col1.button("🎙️ Preview Voice Alone", use_container_width=True)
+    btn_prev_music = prev_col2.button("🎵 Preview Music Alone", use_container_width=True)
+    btn_prev_mix = prev_col3.button("🎧 Preview Complete Mix", use_container_width=True, type="secondary")
+
+    # Determine voice name
+    selected_voice_name = "en-IN-PrabhatNeural" if "Prabhat" in voice_choice else "en-IN-NeerjaNeural"
+    voice_enabled = "None" not in voice_choice
+    selected_track_type = "sitar" if "Sitar" in music_choice else ("piano" if "Piano" in music_choice else None)
+    duck_level = music_volume / 100.0
+
+    preview_cache_dir = Path("outputs/audio_previews")
+    preview_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Preview Voice Alone
+    if btn_prev_vo and edited_script.strip() and voice_enabled:
+        with st.spinner(f"Synthesizing voice with {voice_choice.split('(')[0]}..."):
+            vo_preview_path = preview_cache_dir / f"preview_voice_{'male' if 'Prabhat' in voice_choice else 'female'}.mp3"
             try:
                 generate_indian_voiceover(
                     script_text=edited_script.strip(),
-                    output_path=preview_vo_file,
+                    output_path=vo_preview_path,
                     api_key=effective_key,
+                    voice_name=selected_voice_name,
                 )
-                st.session_state["preview_vo_path"] = str(preview_vo_file)
-                st.success("✓ Indian-English voiceover generated!")
+                st.session_state["active_preview_audio"] = str(vo_preview_path)
+                st.session_state["active_preview_label"] = f"🎙️ Voiceover Preview ({voice_choice.split('(')[0].strip()})"
             except Exception as e:
-                st.error(f"Voiceover generation failed: {e}")
+                st.error(f"Voice generation failed: {e}")
 
-    if st.session_state.get("preview_vo_path") and Path(st.session_state["preview_vo_path"]).exists():
-        st.audio(st.session_state["preview_vo_path"], format="audio/mp3")
+    # 2. Preview Music Alone
+    if btn_prev_music:
+        with st.spinner("Preparing background music preview..."):
+            music_preview_path = preview_cache_dir / f"preview_music_{selected_track_type or 'custom'}.mp3"
+            try:
+                build_music_track(
+                    duration=video_length,
+                    festival=selected_festival,
+                    uploaded_music_path=active_music_path if "Custom" in music_choice else None,
+                    output_path=music_preview_path,
+                    music_track=selected_track_type,
+                )
+                st.session_state["active_preview_audio"] = str(music_preview_path)
+                st.session_state["active_preview_label"] = f"🎵 Music Track Preview ({music_choice.split('(')[0].strip()})"
+            except Exception as e:
+                st.error(f"Music generation failed: {e}")
+
+    # 3. Preview Complete Mix
+    if btn_prev_mix and edited_script.strip():
+        with st.spinner("Mixing voiceover with ducked background music..."):
+            mix_preview_path = preview_cache_dir / f"preview_mix_{video_length}s.mp3"
+            temp_vo = preview_cache_dir / "temp_mix_vo.mp3"
+            temp_music = preview_cache_dir / "temp_mix_music.mp3"
+            try:
+                build_music_track(
+                    duration=video_length,
+                    festival=selected_festival,
+                    uploaded_music_path=active_music_path if "Custom" in music_choice else None,
+                    output_path=temp_music,
+                    music_track=selected_track_type,
+                )
+                if voice_enabled:
+                    generate_indian_voiceover(
+                        script_text=edited_script.strip(),
+                        output_path=temp_vo,
+                        api_key=effective_key,
+                        voice_name=selected_voice_name,
+                    )
+                    cmd_mix = [
+                        "ffmpeg", "-y",
+                        "-i", str(temp_music),
+                        "-i", str(temp_vo),
+                        "-filter_complex",
+                        f"[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume={duck_level:.2f}[mduck];"
+                        f"[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.0[vclean];"
+                        f"[mduck][vclean]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                        "-map", "[aout]",
+                        "-t", str(video_length),
+                        "-c:a", "libmp3lame", "-b:a", "192k",
+                        str(mix_preview_path)
+                    ]
+                    subprocess.run(cmd_mix, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                else:
+                    mix_preview_path = temp_music
+
+                st.session_state["active_preview_audio"] = str(mix_preview_path)
+                st.session_state["active_preview_label"] = f"🎧 Complete Master Audio Mix ({video_length}s)"
+            except Exception as e:
+                st.error(f"Audio mix failed: {e}")
+
+    # Display Active Audio Player
+    if st.session_state.get("active_preview_audio") and Path(st.session_state["active_preview_audio"]).exists():
+        st.markdown(f"**{st.session_state.get('active_preview_label', 'Audio Player')}:**")
+        st.audio(st.session_state["active_preview_audio"], format="audio/mp3")
 
 
 # ─────────────────────────────────────────────
@@ -498,15 +683,45 @@ generate_video_clicked = col_btn2.button("🚀 Generate Festive Video Ad", use_c
 # Compute Plan if project data exists
 if project_data_obj:
     approved_renders = filter_approved_renders(active_renders, project_data_obj.raw_data.get("review"))
-    plan = plan_video_ad(
-        project=project_data_obj,
-        renders=approved_renders,
-        requested_duration=video_length,
-        festival=selected_festival,
-        aspect=aspect_ratio,
-        resolution=resolution,
-    )
+    logo_ok = bool(active_logo_path and Path(active_logo_path).exists())
+    plan_key = json.dumps([
+        project_data_obj.name, [(r.filepath, r.render_type, r.description) for r in approved_renders],
+        video_length, selected_festival, aspect_ratio, resolution, logo_ok, make_all_versions,
+        use_scene_agent, st.session_state.get("approved_script", ""),
+    ])
+    if st.session_state.get("plan_key") != plan_key:
+        user_script = st.session_state.get("approved_script", "").strip() or None
+        base = None
+        if use_scene_agent:
+            with st.spinner("🤖 Gemini scene agent is planning..."):
+                base = plan_with_agent(
+                    project_data_obj, approved_renders, 60 if make_all_versions else video_length,
+                    selected_festival, aspect_ratio, resolution,
+                    script=None if make_all_versions else user_script,
+                    logo_available=logo_ok, api_key=user_api_key or os.getenv("GEMINI_API_KEY", ""),
+                )
+        if make_all_versions:
+            versions = plan_all_versions(
+                project_data_obj, approved_renders, selected_festival, aspect_ratio, resolution,
+                logo_available=logo_ok, base_plan=base,
+            )
+        else:
+            versions = [base or plan_video_ad(
+                project=project_data_obj,
+                renders=approved_renders,
+                requested_duration=video_length,
+                festival=selected_festival,
+                aspect=aspect_ratio,
+                resolution=resolution,
+                script=user_script,
+                logo_available=logo_ok,
+            )]
+        st.session_state["plan_versions"] = versions
+        st.session_state["plan_key"] = plan_key
+    plan_versions: List[AdPlan] = st.session_state["plan_versions"]
+    plan = plan_versions[0]
 else:
+    plan_versions = []
     plan = None
 
 
@@ -516,20 +731,67 @@ if preview_plan_clicked or st.session_state.get("show_plan", False):
     if not project_data_obj:
         st.warning("⚠️ Please upload a valid project JSON or click 'Load Aurelia Heights Sample Assets'.")
     else:
-        st.markdown(f"### 📋 Scene Breakdown & Estimated Cost for {selected_festival} ({video_length}s)")
-        
-        # Summary metrics
-        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-        m_col1.metric("Requested Length", f"{video_length}s")
-        m_col2.metric("Target Final Length", f"{plan.final_duration:.1f}s")
-        m_col3.metric("AI Billed Seconds", f"{plan.total_veo_seconds}s")
-        m_col4.metric("Estimated Cost", f"${plan.total_estimated_cost_usd:.2f}")
+        if is_festival_template:
+            heading_title = f"Indian Festival Ad ({selected_festival})"
+        elif is_family_template:
+            heading_title = "Family Living & Community Ad"
+        else:
+            heading_title = "Standard Luxury Real Estate Ad"
+        if plan.blocked:
+            st.error(f"⛔ Video blocked: {plan.blocked_reason}")
+            if plan.case == "F":
+                st.info("💡 Make a poster with the logo instead (Poster Generator), or ask the developer for renders.")
+        case_text = {
+            "A": "Exterior + interior + amenity renders",
+            "B": "Exterior + amenity renders (no interior)",
+            "C": "Exterior + interior renders (no amenity) – amenities shown as text chips",
+            "D": "Exterior render only – amenities shown as text chips",
+            "E": "No exterior render – no building shots",
+            "F": "No approved renders",
+        }
+        for pv in ([] if plan.blocked else plan_versions):
+            st.markdown(f"### 📋 {heading_title} – {pv.requested_duration}s")
+            st.caption(
+                f"**Case {pv.case}:** {case_text.get(pv.case, '')} • Planner: `{pv.planner}` • "
+                f"Crossfade {pv.crossfade_seconds:.2f}s"
+            )
+            for w in pv.warnings:
+                st.warning(w)
+            if pv.missing_fields:
+                st.caption("**Missing fields:** " + ", ".join(f"`{m}`" for m in pv.missing_fields))
+            for fb in pv.fallbacks_used:
+                st.caption(f"↪️ Fallback: {fb['replaced']} → *{fb['with']}*")
+            problems = validate_plan(pv, approved_renders)
+            if problems:
+                st.error("Rule check failed: " + "; ".join(problems))
 
-        st.dataframe(
-            plan.to_table_data(),
-            use_container_width=True,
-            hide_index=True,
-        )
+            m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+            m_col1.metric("Length", f"{pv.requested_duration}s")
+            m_col2.metric("Planned Length", f"{pv.final_duration:.1f}s")
+            m_col3.metric("New Veo Seconds", f"{pv.total_veo_seconds}s")
+            m_col4.metric("Estimated Cost", f"${pv.total_estimated_cost_usd:.2f}")
+
+            st.dataframe(pv.to_table_data(), use_container_width=True, hide_index=True)
+            st.caption(f"🎙️ **Voiceover ({pv.voiceover_word_count} words):** {pv.voiceover_script}")
+            st.caption("🏷️ **End card:** " + " | ".join(pv.end_card.get("lines", [])))
+            if pv.amenity_text_chips:
+                st.caption("🔖 **Amenity chips:** " + " • ".join(pv.amenity_text_chips))
+
+            with st.expander(f"🎬 Veo prompts – {pv.requested_duration}s", expanded=False):
+                for s_ in pv.veo_scenes:
+                    reuse = f" • reuses 60s scene {s_.reuses_scene_id}" if s_.reuses_scene_id else ""
+                    st.markdown(
+                        f"**Scene {s_.index}: {s_.name}** — `{s_.veo_mode}` • Veo {s_.veo_duration}s, "
+                        f"used {fmt_seconds(s_.duration_seconds)} • *{s_.label}*{reuse}"
+                    )
+                    st.code(s_.prompt, language=None)
+            st.download_button(
+                f"⬇️ Scene plan JSON ({pv.requested_duration}s)",
+                data=json.dumps(pv.to_dict(), indent=2, ensure_ascii=False),
+                file_name=f"scene_plan_{pv.requested_duration}s.json",
+                mime="application/json",
+                key=f"plan_json_{pv.requested_duration}",
+            )
 
         st.caption("ℹ️ 'Preview plan & cost' incurs zero API charges. Review prompts and timing above.")
 
@@ -543,9 +805,11 @@ if generate_video_clicked:
         st.error("❌ Please provide a project JSON with a valid RERA number before generating.")
         st.stop()
 
-    if not active_logo_path:
-        st.error("❌ Please upload a brand logo PNG.")
+    if plan is None or plan.blocked:
+        st.error(f"⛔ Cannot generate: {plan.blocked_reason if plan else 'no plan'}")
         st.stop()
+    if not active_logo_path:
+        st.warning("⚠️ No logo – the end card will show the project name in large text.")
 
     st.markdown("### 🎬 Generating Video Ad...")
     cache_dir = Path("./cache")
@@ -559,87 +823,100 @@ if generate_video_clicked:
         effective_key = user_api_key or os.getenv("GEMINI_API_KEY", "")
         veo = VeoClient(api_key=effective_key, dry_run=enable_simulation)
 
-        # Step 2: Generate Clips
-        clip_paths = []
-        for s in plan.scenes:
-            if s.source_type == "end_card":
-                continue
-            st.write(f"🎥 Rendering Scene {s.index} ({s.duration_seconds}s): **{s.name}**...")
-            try:
-                clip_file = veo.generate_clip(
-                    prompt=s.prompt,
-                    duration=s.duration_seconds,
-                    aspect=aspect_ratio,
-                    resolution=resolution,
-                    image_path=s.render_path,
-                    output_dest=dest,
-                )
-            except Exception as e:
-                st.warning(f"⚠️ Veo live render notice: {e}. Using high-fidelity cinematic motion fallback.")
-                clip_file = veo._generate_mock_clip(
-                    dest, s.duration_seconds, aspect_ratio, resolution, s.render_path, s.prompt
-                )
-            clip_paths.append(clip_file)
-
-        if getattr(veo, "credits_depleted", False):
-            st.info("ℹ️ Google Cloud Veo credits are depleted on your account (HTTP 402). We seamlessly used high-fidelity cinematic motion rendering at $0.00 cost so your video ad completed successfully!")
-
-        # Step 3: End Card
-        st.write("🏷️ Creating Pillow & FFmpeg End Card (4s)...")
-        endcard_dest = cache_dir / f"web_endcard_{plan.endcard_duration}s.mp4"
-        create_endcard_clip(
-            project=project_data_obj,
-            duration=plan.endcard_duration,
-            logo_path=active_logo_path,
-            festival=selected_festival,
-            aspect=aspect_ratio,
-            resolution=resolution,
-            output_path=endcard_dest,
-        )
-
-        # Step 4: Music Track
-        st.write(f"🎵 Generating/Composing background music track for {selected_festival}...")
-        music_dest = cache_dir / f"web_music_{video_length}s.mp3"
-        build_music_track(
-            duration=video_length,
-            festival=selected_festival,
-            uploaded_music_path=active_music_path,
-            output_path=music_dest,
-            api_key=effective_key,
-        )
-
-        # Step 4b: Voiceover Track (Indian-English TTS)
-        voiceover_dest = None
-        script_to_speak = st.session_state.get("approved_script", "").strip()
-        if script_to_speak:
-            st.write("🎙️ Synthesizing Indian-English voiceover & mixing over music bed...")
-            voiceover_dest = cache_dir / f"web_voice_{video_length}s.mp3"
-            try:
-                generate_indian_voiceover(
-                    script_text=script_to_speak,
-                    output_path=voiceover_dest,
-                    api_key=effective_key,
-                )
-            except Exception as e:
-                st.warning(f"Voiceover warning: {e}. Video will proceed with background music track.")
-                voiceover_dest = None
-
-        # Step 5: Stitching & Legal Overlays with Audio Ducking
-        st.write("⚖️ Stitching 0.5s crossfades, ducking music under voiceover, burning RERA bar & disclaimers...")
+        results = []
         clean_pname = project_data_obj.name.replace(" ", "_").lower()
         clean_fest = selected_festival.replace("/", "_").lower()
         clean_aspect = aspect_ratio.replace(":", "_")
-        final_file = output_dir / f"{clean_pname}_{clean_fest}_{video_length}s_{clean_aspect}.mp4"
+        chosen_track = "sitar" if "Sitar" in music_choice else ("piano" if "Piano" in music_choice else None)
 
-        out_path, checks = assemble_final_video(
-            plan=plan,
-            project=project_data_obj,
-            clip_paths=clip_paths,
-            endcard_path=endcard_dest,
-            music_path=music_dest,
-            output_path=final_file,
-            voiceover_path=voiceover_dest,
-        )
+        for pv in plan_versions:
+            dur = pv.requested_duration
+            st.write(f"#### ▶️ {dur}s version (case {pv.case})")
+            # Step 2: Generate Clips (cached by prompt + render + Veo length, so versions share clips)
+            clip_paths = []
+            for s in pv.veo_scenes:
+                reuse = f" (reusing 60s scene {s.reuses_scene_id})" if s.reuses_scene_id else ""
+                st.write(f"🎥 Scene {s.index} ({s.veo_mode}, Veo {s.veo_duration}s){reuse}: **{s.name}**...")
+                dest = cache_dir / f"clip_{dur}s_scene_{s.index}_{s.veo_duration}s.mp4"
+                try:
+                    clip_file = veo.generate_clip(
+                        prompt=s.prompt,
+                        duration=s.veo_duration,
+                        aspect=aspect_ratio,
+                        resolution=resolution,
+                        image_path=s.render_path,
+                        output_dest=dest,
+                    )
+                except Exception as e:
+                    st.warning(f"⚠️ Veo live render notice: {e}. Using cinematic motion fallback.")
+                    clip_file = veo._generate_mock_clip(
+                        dest, s.veo_duration, aspect_ratio, resolution, s.render_path, s.prompt
+                    )
+                clip_paths.append(clip_file)
+
+            # Step 3: End Card
+            st.write(f"🏷️ Creating end card ({pv.endcard_duration}s)...")
+            endcard_dest = cache_dir / f"web_endcard_{dur}s.mp4"
+            create_endcard_clip(
+                project=project_data_obj,
+                duration=pv.endcard_duration,
+                logo_path=active_logo_path,
+                festival=selected_festival,
+                aspect=aspect_ratio,
+                resolution=resolution,
+                output_path=endcard_dest,
+                card=pv.end_card,
+            )
+
+            # Step 4: Music Track
+            st.write(f"🎵 Preparing background music ({music_choice.split('(')[0].strip()})...")
+            music_dest = cache_dir / f"web_music_{dur}s.mp3"
+            build_music_track(
+                duration=dur,
+                festival=selected_festival,
+                uploaded_music_path=active_music_path if "Custom" in music_choice else None,
+                output_path=music_dest,
+                api_key=effective_key,
+                music_track=chosen_track,
+                music_prompt=pv.music_prompt,
+            )
+
+            # Step 4b: Voiceover (approved script for a single version; one script per length in "all" mode)
+            voiceover_dest = None
+            script_to_speak = pv.voiceover_script.strip()
+            if script_to_speak and "None" not in voice_choice:
+                st.write(f"🎙️ Synthesizing voiceover ({voice_choice.split('(')[0].strip()})...")
+                voiceover_dest = cache_dir / f"web_voice_{dur}s.mp3"
+                try:
+                    chosen_voice_name = "en-IN-PrabhatNeural" if "Prabhat" in voice_choice else "en-IN-NeerjaNeural"
+                    generate_indian_voiceover(
+                        script_text=script_to_speak,
+                        output_path=voiceover_dest,
+                        api_key=effective_key,
+                        voice_name=chosen_voice_name,
+                    )
+                except Exception as e:
+                    st.warning(f"Voiceover warning: {e}. Video will proceed with background music track.")
+                    voiceover_dest = None
+
+            # Step 5: Stitching & Legal Overlays with Audio Ducking
+            st.write("⚖️ Trimming clips, crossfading, ducking music, burning RERA bar, labels & disclaimers...")
+            final_file = output_dir / f"{clean_pname}_{clean_fest}_{dur}s_{clean_aspect}.mp4"
+            duck_vol = (music_volume / 100.0) if voiceover_dest else 1.0
+            out_path, checks = assemble_final_video(
+                plan=pv,
+                project=project_data_obj,
+                clip_paths=clip_paths,
+                endcard_path=endcard_dest,
+                music_path=music_dest,
+                output_path=final_file,
+                voiceover_path=voiceover_dest,
+                music_duck_volume=duck_vol,
+            )
+            results.append((pv, out_path, checks, voiceover_dest))
+
+        if getattr(veo, "credits_depleted", False):
+            st.info("ℹ️ Google Cloud Veo credits are depleted on your account (HTTP 402). Cinematic motion rendering was used at $0.00 cost.")
 
         status_box.update(label="🎉 Video Ad Export Complete & Verified!", state="complete", expanded=False)
 
@@ -649,37 +926,40 @@ if generate_video_clicked:
     st.divider()
     st.markdown("### 🏆 Your Generated Festive Real-Estate Ad")
 
-    v_col1, v_col2 = st.columns([3, 2], gap="large")
+    for plan, out_path, checks, voiceover_dest in results:
+        st.markdown(f"#### {plan.requested_duration}s version")
+        v_col1, v_col2 = st.columns([3, 2], gap="large")
 
-    with v_col1:
-        if out_path.exists():
-            st.video(str(out_path))
-            with open(out_path, "rb") as vf:
-                st.download_button(
-                    label=f"⬇️ Download Video ({out_path.name})",
-                    data=vf.read(),
-                    file_name=out_path.name,
-                    mime="video/mp4",
-                    use_container_width=True,
-                    type="primary",
-                )
+        with v_col1:
+            if out_path.exists():
+                st.video(str(out_path))
+                with open(out_path, "rb") as vf:
+                    st.download_button(
+                        label=f"⬇️ Download Video ({out_path.name})",
+                        key=f"dl_{out_path.name}",
+                        data=vf.read(),
+                        file_name=out_path.name,
+                        mime="video/mp4",
+                        use_container_width=True,
+                        type="primary",
+                    )
 
-    with v_col2:
-        st.markdown("#### ✅ Verification & Quality Report")
-        st.markdown(f"""
-        - **Project:** `{project_data_obj.name}`
-        - **Festival:** `{selected_festival}`
-        - **Requested Duration:** `{video_length} seconds`
-        - **Exported Duration:** `{checks['actual_duration']} seconds` (±1s tolerance: **{'PASSED' if checks['duration_passed'] else 'FLAGGED'}**)
-        - **Audio Production:** **{'🎙️ Indian-English AI Voiceover + Ducked Music' if voiceover_dest else '🎵 Festive Instrumental Music'}**
-        - **Legal RERA Bar:** `RERA No: {project_data_obj.rera_number} | *T&C Apply`
-        - **RERA Compliance:** **{'✓ Present on every frame' if checks['rera_bar_verified'] else '⚠️ Check frames'}**
-        - **Frames Inspected:** `{checks['frames_checked']} frames verified (1 FPS)`
-        - **AI Video Engine:** `Google Gemini Veo 3.1 Fast`
-        - **Estimated Cost:** `${plan.total_estimated_cost_usd:.2f} USD`
-        """)
+        with v_col2:
+            st.markdown("#### ✅ Verification & Quality Report")
+            st.markdown(f"""
+            - **Project:** `{project_data_obj.name}`
+            - **Campaign Template:** `{"Indian Festival (" + selected_festival + ")" if is_festival_template else ("Family Living & Community Ad" if is_family_template else "Standard Luxury Real Estate Ad")}`
+            - **Requested Duration:** `{plan.requested_duration} seconds`
+            - **Exported Duration:** `{checks['actual_duration']} seconds` (±1s tolerance: **{'PASSED' if checks['duration_passed'] else 'FLAGGED'}**)
+            - **Audio Production:** **{'🎙️ Indian-English AI Voiceover + Ducked Music' if voiceover_dest else '🎵 Festive Instrumental Music'}**
+            - **Legal RERA Bar:** `RERA No: {project_data_obj.rera_number} | *T&C Apply`
+            - **RERA Compliance:** **{'✓ Present on every frame' if checks['rera_bar_verified'] else '⚠️ Check frames'}**
+            - **Frames Inspected:** `{checks['frames_checked']} frames verified (1 FPS)`
+            - **AI Video Engine:** `Google Gemini Veo 3.1 Fast`
+            - **Estimated Cost:** `${plan.total_estimated_cost_usd:.2f} USD`
+            """)
 
-        if not project_data_obj.is_verified:
-            st.warning("⚠️ **Notice:** 'DRAFT - NOT FOR PUBLICATION' watermark is burned into the video because project status is unverified.")
-        else:
-            st.success("✨ **Ready for Broadcast:** Fully compliant with RERA guidelines and advertising limits.")
+            if plan.warnings:
+                st.warning("Check before publishing: " + " ".join(plan.warnings))
+            else:
+                st.success("✨ Ready for review: RERA bar, labels and disclaimers applied.")
