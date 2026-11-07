@@ -38,6 +38,7 @@ from planner import (
     max_voiceover_words,
 )
 from gemini_text import credentials_available, generate_json
+from voiceover import normalize_point_o
 from project_data import ProjectData
 
 load_dotenv()
@@ -248,7 +249,7 @@ Return ONLY a JSON array (no markdown) in exactly this shape:
     print(f"[ScriptWriter] Scripts written by {used}")
     options = []
     for item in (data or [])[:3]:
-        txt = str(item.get("text", "")).strip()
+        txt = normalize_point_o(str(item.get("text", "")).strip())
         if not txt:
             continue
         wcount = len(txt.split())

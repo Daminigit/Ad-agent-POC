@@ -22,6 +22,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def normalize_point_o(text: str) -> str:
+    """'two point zero' / 'two-point-zero' / 'point 0' -> 'two point o' (Indian way of saying 2.0)."""
+    text = re.sub(r"\bpoint[\s-]+(zero|0)\b", "point o", text, flags=re.I)
+    # also "point zero five" -> "point o five" (each digit after the point)
+    while re.search(r"\bpoint((?:\s+(?:o|one|two|three|four|five|six|seven|eight|nine))+)\s+(zero|0)\b", text, re.I):
+        text = re.sub(r"\bpoint((?:\s+(?:o|one|two|three|four|five|six|seven|eight|nine))+)\s+(zero|0)\b",
+                      lambda m: f"point{m.group(1)} o", text, flags=re.I)
+    return text
+
+
 def _phonetic_clean_for_speech(text: str) -> str:
     """
     Phonetically optimize real-estate terms for authentic Indian pronunciation.
@@ -46,7 +56,15 @@ def _phonetic_clean_for_speech(text: str) -> str:
 
     # 3b. Decimals as spoken in India: "2.0" -> "two point o", "1.42" -> "one point four two"
     from planner import number_words
-    text = re.sub(r"(?<![\d.])(\d+\.\d+)(?![\d.])", lambda m: number_words(m.group(1)), text)
+    # (a full stop right after the number – "Eternia 2.0." – must not block the match)
+    text = re.sub(r"(?<![\d.])(\d+\.\d+)(?!\.?\d)", lambda m: number_words(m.group(1)), text)
+    # 3c. Zero after "point" is always "o", however the script spelled it ("two point zero", "2 point 0")
+    text = normalize_point_o(text)
+    # 3d. The TTS engine reads a bare "o" after "point" as "zero" – spell it "oh" so it is said "two point oh"
+    digit = r"(?:oh|one|two|three|four|five|six|seven|eight|nine)"
+    pat = re.compile(rf"\bpoint((?:\s+{digit})*)\s+o\b", re.I)
+    while pat.search(text):
+        text = pat.sub(lambda m: f"point{m.group(1)} oh", text)
 
     # 4. Clean separation of BHK letters so it is spoken as 'B-H-K'
     text = re.sub(r"\bBHK\b", "B-H-K", text)
