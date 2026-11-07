@@ -161,10 +161,18 @@ Render scenes (veo_mode "image_to_video", label "Artist's impression"):
   {amenity people} The people are added naturally into the scene; do not change, move or
   cover the architecture, furniture or layout. Keep the architecture, water, landscaping
   and furniture exactly as in the image."
+- People in render scenes must look natural: at most two people (four for the Family
+  theme), close to the camera in the foreground, walking in smoothly from the edge of the
+  frame at the start of the shot (nobody appears or disappears suddenly), children beside
+  the adults rather than behind them, and faces sharp, well lit and consistent from frame
+  to frame. Add: "The people walk in smoothly from the edge of the frame at the start of
+  the shot; nobody appears, disappears or changes suddenly. Keep them in the foreground at
+  medium distance, faces sharp, well lit and clearly visible with natural, realistic
+  features that stay consistent from frame to frame; no blurry, distorted or morphing faces."
 - People in interior and amenity render scenes, by theme (exteriors stay "No people"):
-  - Festival: {person} doing the festival ritual (e.g. lighting a diya), with an Indian
-    family in festive traditional clothes nearby; at amenities, a few Indian families in
-    festive traditional clothes strolling, and {person} greeting them.
+  - Festival: {person} walks in with her young son in festive traditional clothes beside
+    her and does the festival ritual (e.g. lights a diya); at amenities, the two walk in
+    hand in hand and smile at the camera. Only these two people.
   - Family: ONLY an Indian husband and wife with their two young children (a boy and a
     girl), all in festive traditional clothes, the wife in a silk saree. No grandparents
     or other people. Family close-ups use only these four people too.

@@ -241,44 +241,54 @@ def assemble_final_video(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+STITCH_FPS = 24   # Veo's native frame rate
+
+
 def _stitch_scenes(scenes: List[Path], dest: Path, crossfade_dur: float = 0.5) -> None:
     """
-    Concatenate video scenes using FFmpeg xfade (crossfade) filter.
-    Falls back to concat demuxer if xfade graph fails.
+    Join scenes with smooth crossfades (FFmpeg xfade).
+    Every clip is first brought to the same size, frame rate and pixel format: xfade fails on
+    mixed inputs (Veo clips are 24 fps, the end card is 25 fps), which used to cause hard cuts.
+    Falls back to a plain concat only if the fade graph still fails, and says so.
     """
     if len(scenes) == 1:
         shutil.copy2(scenes[0], dest)
         return
 
+    width, height = _get_video_dimensions(scenes[0])
     durations = [_get_video_duration(s) for s in scenes]
 
-    filter_complex = []
-    inputs = []
-    for i, s in enumerate(scenes):
-        inputs.extend(["-i", str(s)])
-
-    last_v = "0:v"
-    current_offset = durations[0] - crossfade_dur
-
-    for i in range(1, len(scenes)):
-        next_v = f"v{i}"
-        filter_complex.append(
-            f"[{last_v}][{i}:v]xfade=transition=fade:duration={crossfade_dur}:offset={max(0.1, current_offset):.2f}[{next_v}]"
+    inputs: List[str] = []
+    filters: List[str] = []
+    for i, sc in enumerate(scenes):
+        inputs.extend(["-i", str(sc)])
+        filters.append(
+            f"[{i}:v]fps={STITCH_FPS},scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,settb=AVTB[n{i}]"
         )
-        last_v = next_v
-        if i + 1 < len(scenes):
-            current_offset += durations[i] - crossfade_dur
+
+    last_v = "n0"
+    offset = durations[0] - crossfade_dur
+    for i in range(1, len(scenes)):
+        nxt = f"v{i}"
+        if crossfade_dur > 0:
+            filters.append(
+                f"[{last_v}][n{i}]xfade=transition=fade:duration={crossfade_dur}:offset={max(0.1, offset):.3f}[{nxt}]"
+            )
+        else:
+            filters.append(f"[{last_v}][n{i}]concat=n=2:v=1:a=0[{nxt}]")
+        last_v = nxt
+        offset += durations[i] - crossfade_dur
 
     cmd = (
         ["ffmpeg", "-y"]
         + inputs
-        + ["-filter_complex", ";".join(filter_complex), "-map", f"[{last_v}]"]
-        + ["-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", str(dest)]
+        + ["-filter_complex", ";".join(filters), "-map", f"[{last_v}]"]
+        + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", str(dest)]
     )
-
-    try:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-    except Exception:
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"[Stitch] ⚠️ Crossfade failed, using hard cuts: {res.stderr.strip()[-300:]}")
         _concat_simple(scenes, dest)
 
 

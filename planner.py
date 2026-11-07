@@ -45,7 +45,7 @@ VEO_PRICING = {
 }
 
 VEO_CLIP_LENGTHS = (4, 6, 8)
-DEFAULT_CROSSFADE = 0.5
+DEFAULT_CROSSFADE = 0.8   # seconds of fade between scenes (smoother than a quick cut)
 WORDS_PER_SECOND = 2.0   # measured pace of the Indian-English voice (~2.1 words/s once silence is trimmed)
 SPEC_MAX_WORDS = {10: 17, 20: 40, 60: 120}
 
@@ -790,32 +790,44 @@ _FAMILY = "an Indian family in festive traditional clothes"
 # Family theme: only these four people (husband, wife and two children)
 _NUCLEAR_FAMILY = ("an Indian husband and wife with their two young children, a boy and a girl, all four in "
                    "festive traditional clothes")
-PEOPLE_GUARD = (" The people are added naturally into the scene; do not change, move or cover the "
-                "architecture, furniture or layout.")
+PEOPLE_GUARD = (
+    " The people walk in smoothly from the edge of the frame at the start of the shot; nobody appears, "
+    "disappears or changes suddenly. Keep them in the foreground at medium distance, faces sharp, well lit "
+    "and clearly visible with natural, realistic features that stay consistent from frame to frame; no "
+    "blurry, distorted or morphing faces. Do not change, move or cover the architecture, furniture or layout."
+)
 
 
 def render_people(render_type: str, festival: str) -> str:
-    """Themed people for interior and amenity render scenes (exteriors stay empty)."""
+    """Themed people for interior and amenity render scenes (exteriors stay empty).
+    Few people, close to the camera, entering from the side – so faces are clear and nobody pops in."""
     woman = _person(festival)
+    W = woman[0].upper() + woman[1:]
     if render_type == "interior":
         if festival == "None":
-            line = f"{woman[0].upper() + woman[1:]} walks calmly through the room and pauses by the window."
+            line = (f"{W} walks into the room from the left, pauses in the foreground by the window and "
+                    "turns to the camera with a calm smile.")
         elif festival == "Family":
-            line = (f"{_NUCLEAR_FAMILY[0].upper() + _NUCLEAR_FAMILY[1:]} share a warm moment together on "
-                    "the sofa, smiling; the wife wears a silk saree. Only these four people, no one else.")
+            line = (f"{_NUCLEAR_FAMILY[0].upper() + _NUCLEAR_FAMILY[1:]} walk into the room together from "
+                    "the left, the children holding their parents' hands, and stop in the foreground smiling "
+                    "at each other; the wife wears a silk saree. Only these four people, no one else.")
         else:
             action = _FESTIVE_ACTION.get(festival, "lights a brass lamp")
-            line = (f"{woman[0].upper() + woman[1:]} {action}, while {_FAMILY} smiles and "
-                    "celebrates nearby.")
+            line = (f"{W} walks into the room from the left with her young son in festive traditional clothes "
+                    f"beside her; in the foreground she {action} "
+                    "while the boy watches and smiles. Only these two people.")
     elif render_type == "amenity":
         if festival == "None":
-            line = "Two Indian professionals in smart business suits walk and talk calmly around it."
+            line = ("Two Indian professionals in smart business suits walk into the frame from the left, "
+                    "talking calmly, and pass through the foreground with their faces clearly visible.")
         elif festival == "Family":
-            line = (f"{_NUCLEAR_FAMILY[0].upper() + _NUCLEAR_FAMILY[1:]} enjoy it together, the two "
-                    "children laughing; the wife wears a silk saree. Only these four people, no one else.")
+            line = (f"{_NUCLEAR_FAMILY[0].upper() + _NUCLEAR_FAMILY[1:]} walk into the frame together from "
+                    "the left and stroll through the foreground, the two children laughing; the wife wears a "
+                    "silk saree. Only these four people, no one else.")
         else:
-            line = (f"A few Indian families in festive traditional clothes stroll and chat around it, "
-                    f"and {woman} greets them warmly.")
+            line = (f"{W} walks into the frame from the left holding the hand of her young son in festive "
+                    "traditional clothes, the boy walking beside her, not behind; in the foreground they turn "
+                    "toward the camera and smile. Only these two people.")
     else:
         return ""
     return " " + line + PEOPLE_GUARD
@@ -905,7 +917,11 @@ _CLOSEUPS: Dict[str, List[Tuple[str, str]]] = {
         ("father and daughter", "Close-up of an Indian father in a festive kurta smiling with his young daughter in a festive lehenga, background in soft bokeh."),
     ],
 }
-CLOSEUP_GUARD = " Tight framing on people, hands and decorations only: no full room, no building, no amenity visible."
+CLOSEUP_GUARD = (
+    " Tight framing on people, hands and decorations only: no full room, no building, no amenity visible."
+    " Slow, steady motion with no sudden changes; any face in frame is sharp and natural, with realistic"
+    " features that stay consistent; no distorted or morphing faces or hands."
+)
 
 
 def closeup_shot(festival: str, idx: int, aspect: str) -> Tuple[str, str]:
@@ -1281,8 +1297,10 @@ def plan_video_ad(
     price_per_sec = VEO_PRICING.get(resolution, 0.12)
 
     scenes: List[PlannedScene] = []
+    # Trim the longest clip (not a short close-up) so every scene stays watchable
+    trim_at = max(range(1, len(durs) + 1), key=lambda k: (durs[k - 1], k))
     for i, (c, d) in enumerate(zip(chosen, durs), 1):
-        used = d - trim if i == len(chosen) else d
+        used = d - trim if i == trim_at else d
         if c.kind == "closeup":
             short, prompt = closeup_shot(festival, c.closeup_idx, aspect)
             scenes.append(PlannedScene(
@@ -1346,9 +1364,11 @@ def derive_version(base: AdPlan, project: ProjectData, duration: int, logo_avail
         ))
     chosen, durs, trim = _select_and_time(cands, base.case, duration, endcard, xf)
     scenes: List[PlannedScene] = []
+    # Trim the longest clip (not a short close-up) so every scene stays watchable
+    trim_at = max(range(1, len(durs) + 1), key=lambda k: (durs[k - 1], k))
     for i, (c, d) in enumerate(zip(chosen, durs), 1):
         src = c.source
-        used = d - trim if i == len(chosen) else d
+        used = d - trim if i == trim_at else d
         scenes.append(PlannedScene(
             index=i, name=src.name, source_type=src.source_type, duration_seconds=used, kind=src.kind,
             veo_mode=src.veo_mode, veo_duration=src.veo_duration, render_path=src.render_path,
