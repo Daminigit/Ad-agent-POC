@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "poster-generator",
+      "runtimeExecutable": "/Users/darshan/Documents/ad agent POC/Ad-agent-POC/.venv/bin/python",
+      "runtimeArgs": ["-m", "streamlit", "run", "/Users/darshan/Documents/ad agent POC/Ad-agent-POC/poster_generator/app.py", "--server.port", "8502", "--server.headless", "true"],
+      "port": 8502
+    },
+    {
+      "name": "video-ad-generator",
+      "runtimeExecutable": "/Users/darshan/Documents/ad agent POC/Ad-agent-POC/.venv/bin/python",
+      "runtimeArgs": ["-m", "streamlit", "run", "/Users/darshan/Documents/ad agent POC/Ad-agent-POC/app.py", "--server.port", "8503", "--server.headless", "true"],
+      "port": 8503
+    }
+  ]
+}
