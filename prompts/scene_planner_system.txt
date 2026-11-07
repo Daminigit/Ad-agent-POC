@@ -168,10 +168,10 @@ Render scenes (veo_mode "image_to_video", label "Artist's impression"):
   cover the architecture, furniture or layout. Keep the architecture, water, landscaping
   and furniture exactly as in the image."
 - People in render scenes must look natural: at most two people (four for the Family
-  theme), close to the camera in the foreground, walking in smoothly from the edge of the
-  frame at the start of the shot (nobody appears or disappears suddenly), children beside
-  the adults rather than behind them, and faces sharp, well lit and consistent from frame
-  to frame. Add: "The people walk in smoothly from the edge of the frame at the start of
+  theme), starting far away in the background and walking toward the camera, ending in
+  the mid-ground fully inside the frame (nobody appears or disappears suddenly). Heads up,
+  eyes clearly open, looking ahead and at each other with relaxed smiles – never looking
+  down at the ground, no closed or blank eyes. Both children visible in Family scenes. Add: "The people walk in smoothly from the edge of the frame at the start of
   the shot; nobody appears, disappears or changes suddenly. Keep them in the foreground at
   medium distance, faces sharp, well lit and clearly visible with natural, realistic
   features that stay consistent from frame to frame; no blurry, distorted or morphing faces."
@@ -183,8 +183,12 @@ Render scenes (veo_mode "image_to_video", label "Artist's impression"):
     girl), all in festive traditional clothes, the wife in a silk saree. No grandparents
     or other people. Family close-ups use only these four people too.
   - None (standard ad): Indian professionals in smart business suits.
-camera_move options: drone push-in, slow orbit, slow pan left to right, slow tilt up,
-gentle dolly-in. Use a different one each time a render is reused.
+camera_move options: drone push-in, gentle dolly-in, slow push-in toward the left side,
+slow push-in toward the right side. Use a different one each time a render is reused.
+NEVER pan, orbit or tilt: those slide past the edge of the render and make Veo invent
+trees, paths or buildings that are not in the image. Add to every render prompt: "The
+camera stays inside the picture: it only moves slowly closer and never pans, orbits or
+tilts past the edges of the image, so nothing outside the image is revealed or invented."
 
 People (in render scenes only – the person description is used for the whole video):
 - Festival and Family themes: "a graceful Indian woman in her early 30s with jasmine flowers

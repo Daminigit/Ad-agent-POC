@@ -52,7 +52,11 @@ SPEC_MAX_WORDS = {10: 17, 20: 40, 60: 120}
 LABEL_RENDER = "Artist's impression"
 LABEL_CLOSEUP = "For illustration only"
 
-CAMERA_MOVES = ["drone push-in", "slow orbit", "slow pan left to right", "slow tilt up", "gentle dolly-in"]
+# Only moves that stay INSIDE the render: pans, orbits and tilts slide past the image edge and make Veo
+# invent what lies beyond it (extra trees, paths, buildings). Every move here just moves closer.
+CAMERA_MOVES = ["drone push-in", "gentle dolly-in", "slow push-in toward the left side", "slow push-in toward the right side"]
+IN_FRAME = (" The camera stays inside the picture: it only moves slowly closer and never pans, orbits or tilts"
+            " past the edges of the image, so nothing outside the image is revealed or invented.")
 
 BANNED_CLAIMS = ["best", "luxury-most", "guaranteed", "lowest price", "high returns"]
 PRICE_HINT_WORDS = ["affordable", "budget", "low price", "best price", "value for money"]
@@ -812,15 +816,15 @@ def check_script(script: str, project: ProjectData, budget: int) -> List[str]:
 # Veo prompts
 # ═════════════════════════════════════════════════════════════════════
 
-_MOVE_PHRASE = {
-    "drone push-in": "drone push-in",
-    "slow orbit": "orbit",
-    "slow pan left to right": "pan left to right",
-    "slow tilt up": "tilt up",
-    "gentle dolly-in": "dolly-in",
-}
-_EXTERIOR_PREP = {"drone push-in": "toward", "slow orbit": "around", "slow pan left to right": "across",
-                  "slow tilt up": "up over", "gentle dolly-in": "toward"}
+_EXT_MOVE = {"drone push-in": "drone push-in toward", "gentle dolly-in": "dolly-in toward",
+             "slow push-in toward the left side": "push-in toward the left side of",
+             "slow push-in toward the right side": "push-in toward the right side of"}
+_INT_MOVE = {"drone push-in": "push-in into", "gentle dolly-in": "dolly-in into",
+             "slow push-in toward the left side": "push-in toward the left side of",
+             "slow push-in toward the right side": "push-in toward the right side of"}
+_AMEN_MOVE = {"drone push-in": "push-in toward", "gentle dolly-in": "dolly-in toward",
+              "slow push-in toward the left side": "push-in toward the left side of",
+              "slow push-in toward the right side": "push-in toward the right side of"}
 
 _INTERIOR_DECOR = {
     "Diwali": "lit brass diyas, marigold garlands and a small flower rangoli",
@@ -846,9 +850,7 @@ def render_prompt(render_type: str, camera_move: str, festival: str, aspect: str
     """people: None = default (interiors and amenities have people, exteriors don't)."""
     if people is None:
         people = render_type in ("interior", "amenity")
-    phrase = _MOVE_PHRASE.get(camera_move, camera_move)
     if render_type == "exterior":
-        prep = _EXTERIOR_PREP.get(camera_move, "toward")
         if festival == "Family":
             setting = ("on a bright, sunny morning. Soft natural sunlight on the facade, trees and "
                        "landscaping, a clear blue sky.")
@@ -859,7 +861,7 @@ def render_prompt(render_type: str, camera_move: str, festival: str, aspect: str
             setting = (f"at dusk during {festival}. Warm golden fairy lights on the balconies, a few "
                        f"glowing lanterns, {sky}.")
         base = (
-            f"Slow, cinematic {phrase} {prep} the residential buildings in this image, {setting} "
+            f"Slow, cinematic {_EXT_MOVE.get(camera_move, 'push-in toward')} the residential buildings in this image, {setting} "
             "Keep the buildings EXACTLY as in the image: same number of towers, same height, shape, "
             "facade and colours. Do not add, remove or reshape any building."
             + (render_people("exterior", festival) if people else " No people.")
@@ -875,7 +877,7 @@ def render_prompt(render_type: str, camera_move: str, festival: str, aspect: str
             dressing = f"decorated for {festival} with {_INTERIOR_DECOR.get(festival, 'marigold garlands and lit brass lamps')}."
             light = " Warm evening light."
         base = (
-            f"Slow, smooth cinematic {phrase} through this room exactly as shown in the image, {dressing}"
+            f"Slow, smooth cinematic {_INT_MOVE.get(camera_move, 'dolly-in into')} this room exactly as shown in the image, {dressing}"
             f"{render_people('interior', festival) if people else ' No people.'} "
             f"Keep the room layout, furniture, windows and finishes exactly as in the image.{light}"
         )
@@ -887,11 +889,11 @@ def render_prompt(render_type: str, camera_move: str, festival: str, aspect: str
         else:
             setting = f"in the evening during {festival}, with {_AMENITY_LIGHTS.get(festival, 'warm string lights and lamps around it')}."
         base = (
-            f"Slow, cinematic {phrase} across this amenity exactly as shown in the image, {setting}"
+            f"Slow, cinematic {_AMEN_MOVE.get(camera_move, 'dolly-in toward')} this amenity exactly as shown in the image, {setting}"
             f"{render_people('amenity', festival) if people else ' No people.'} "
             "Keep the architecture, water, landscaping and furniture exactly as in the image."
         )
-    return base + veo_suffix(aspect)
+    return base + IN_FRAME + veo_suffix(aspect)
 
 
 _SAREE_BY_FESTIVAL = {
@@ -925,13 +927,18 @@ _FESTIVE_ACTION = {
 }
 _FAMILY = "an Indian family in festive traditional clothes"
 # Family theme: only these four people (husband, wife and two children)
-_NUCLEAR_FAMILY = ("an Indian husband and wife with their two young children, a boy and a girl, all four in "
-                   "festive traditional clothes")
+_NUCLEAR_FAMILY = ("an Indian husband and wife with their two young children – one boy in a kurta and one "
+                   "girl with long hair in a pavadai/lehenga – all four in festive traditional clothes")
 PEOPLE_GUARD = (
-    " The people walk in smoothly from the edge of the frame at the start of the shot; nobody appears, "
-    "disappears or changes suddenly. Keep them in the foreground at medium distance, faces sharp, well lit "
-    "and clearly visible with natural, realistic features that stay consistent from frame to frame; no "
-    "blurry, distorted or morphing faces. Do not change, move or cover the architecture, furniture or layout."
+    " The people start far away in the background and walk calmly toward the camera, ending in the mid-ground,"
+    " fully inside the frame (no one cut off at the edge); nobody appears, disappears or changes suddenly."
+    " They look like natural, real people: heads up, eyes clearly open and bright, looking ahead, around the"
+    " space and at each other with relaxed, natural smiles and blinking normally – never looking down at the"
+    " ground, no closed, blank or staring eyes. Realistic faces that stay consistent from frame to frame;"
+    " no distorted or morphing faces. They are solid and fully visible from their first frame – no"
+    " see-through or ghost-like figures. Do not change, move or cover the architecture, furniture or layout,"
+    " and do not add any new path, paving, stepping stones or walkway – people walk only on surfaces that"
+    " already exist in the image."
 )
 
 
@@ -943,26 +950,33 @@ def render_people(render_type: str, festival: str) -> str:
     family = _NUCLEAR_FAMILY[0].upper() + _NUCLEAR_FAMILY[1:]
     if render_type == "interior":
         if festival == "None":
-            line = (f"{W} walks into the room from the left, pauses in the foreground by the window and "
-                    "turns to the camera with a calm smile.")
+            line = (f"{W} walks in from the far side of the room, pauses by the window, looks out at the view "
+                    "and turns to the camera with a calm smile.")
         elif festival == "Family":
-            line = (f"{family} walk into the room together from the left, the children holding their parents' "
-                    "hands, and stop in the foreground smiling at each other; the wife wears a silk saree. "
+            line = (f"{family} walk in together from the far side of the room, the boy holding his father's hand "
+                    "and the girl holding her mother's hand, and stop in the mid-ground, chatting and smiling at "
+                    "each other; both children are clearly visible; the wife wears a silk saree. "
                     "Only these four people, no one else.")
         else:
             action = _FESTIVE_ACTION.get(festival, "lights a brass lamp")
-            line = (f"{W} walks into the room from the left with her young son in festive traditional clothes "
-                    f"beside her; in the foreground she {action} while the boy watches and smiles. "
-                    "Only these two people.")
+            line = (f"{W} walks in from the far side of the room with her young son in festive traditional "
+                    f"clothes beside her; in the mid-ground she {action} while the boy watches, eyes bright, and "
+                    "smiles. Only these two people.")
     elif render_type in ("amenity", "exterior"):
-        where = "along the path through this amenity" if render_type == "amenity" else \
-            "along the landscaped path in the foreground, in front of the buildings"
+        where = ("through this amenity, across the open ground or along a walkway that already exists in the "
+                 "image") if render_type == "amenity" else \
+            "along a walkway that already exists in the image, in front of the buildings"
         if festival == "Family":
-            line = (f"{family} walk slowly {where} from the left, the children holding their parents' hands; "
-                    "the wife wears a silk saree. Only these four people, no one else.")
+            line = (f"An Indian mother in her early 30s in an elegant silk saree walks slowly {where}, coming "
+                    "from the far end toward the camera, holding the hands of her two young children – a boy in "
+                    "a kurta and a girl with long hair in a pavadai/lehenga – one on each side, all three smiling "
+                    "and looking around. The father, in a festive kurta, walks a few steps behind them from the "
+                    "same direction, then catches up and walks beside them with a warm smile. Exactly four "
+                    "people – mother, boy, girl and father – no one else.")
         else:
-            line = (f"{W} walks slowly {where} from the left, enjoying the space, and glances at the "
-                    "camera with a gentle smile. Only this one person, no one else.")
+            line = (f"{W} walks slowly {where}, coming from the far end toward the camera, looking around "
+                    "and enjoying the space, then glances at the camera with a gentle smile. "
+                    "Only this one person, no one else.")
     else:
         return ""
     return " " + line + PEOPLE_GUARD
@@ -1071,15 +1085,15 @@ class _Cand:
 
 def _first_move(rtype: str, is_opening: bool) -> str:
     if rtype == "exterior":
-        return "drone push-in" if is_opening else "slow orbit"
-    return "gentle dolly-in" if rtype == "interior" else "slow pan left to right"
+        return "drone push-in" if is_opening else "slow push-in toward the left side"
+    return "gentle dolly-in"
 
 
 def _reuse_move(rtype: str, first: str, case: str) -> str:
     prefs = {
-        "exterior": ["slow pan left to right" if case == "D" else "slow tilt up", "slow tilt up", "slow orbit"],
-        "interior": ["slow pan left to right", "slow orbit"],
-        "amenity": ["slow orbit", "gentle dolly-in"],
+        "exterior": ["slow push-in toward the right side", "slow push-in toward the left side"],
+        "interior": ["slow push-in toward the right side", "slow push-in toward the left side"],
+        "amenity": ["slow push-in toward the left side", "slow push-in toward the right side"],
     }.get(rtype, CAMERA_MOVES)
     for m in prefs + CAMERA_MOVES:
         if m != first:
