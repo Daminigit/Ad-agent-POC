@@ -49,6 +49,8 @@ DEFAULT_CROSSFADE = 0.8   # seconds of fade between scenes (smoother than a quic
 WORDS_PER_SECOND = 2.0   # measured pace of the Indian-English voice (~2.1 words/s once silence is trimmed)
 SPEC_MAX_WORDS = {10: 17, 20: 40, 60: 120}
 
+PEOPLE_MAX_USED = 6        # longest people scene shown (its Veo clip is 2 s longer)
+PEOPLE_HEAD_SKIP = 1.0     # seconds skipped at the start of people clips (hides Veo's ghostly fade-in)
 LABEL_RENDER = "Artist's impression"
 LABEL_CLOSEUP = "For illustration only"
 
@@ -104,6 +106,7 @@ class PlannedScene:
     reuses_scene_id: Optional[int] = None
     show_amenity_chips: bool = False
     has_people: bool = False
+    start_offset: float = 0.0           # seconds skipped at the start of the Veo clip (people fade-in)
 
     @property
     def source_render(self) -> Optional[str]:
@@ -938,7 +941,8 @@ PEOPLE_GUARD = (
     " space and at each other with relaxed, natural smiles and blinking normally – never looking down at the"
     " ground, no closed, blank or staring eyes. Realistic faces that stay consistent from frame to frame;"
     " no distorted or morphing faces. They are solid and fully visible from their first frame – no"
-    " see-through or ghost-like figures. Do not change, move or cover the architecture, furniture or layout,"
+    " see-through or ghost-like figures. Any small people already in the image stay solid and keep"
+    " walking or sitting naturally; they never fade, flicker or disappear. Do not change, move or cover the architecture, furniture or layout,"
     " and do not add any new path, paving, stepping stones or walkway – people walk only on surfaces that"
     " already exist in the image."
 )
@@ -1196,7 +1200,10 @@ def _choose_durations(
 ) -> Optional[List[int]]:
     """Distribute `total` seconds over clips (each 4/6/8, never above its cap)."""
     n = len(chosen)
-    caps = [max(4, min(8, c.cap)) for c in chosen]
+    # People scenes are made 2 s longer in Veo and the first second is skipped (Veo dissolves people in
+    # like ghosts at the start), so they may use at most 6 s
+    caps = [max(4, min(8, min(c.cap, PEOPLE_MAX_USED) if (c.people and c.source is None) else c.cap))
+            for c in chosen]
     if not (4 * n <= total <= sum(caps)):
         return None
     durs = [min(6, cap) for cap in caps]
@@ -1431,6 +1438,10 @@ def plan_video_ad(
                 label=LABEL_RENDER, has_people=c.people,
                 estimated_cost_usd=round(d * price_per_sec, 2), is_opening=c.is_opening, priority=c.keep,
             ))
+            if c.people and d + 2 <= 8:
+                scenes[-1].veo_duration = d + 2
+                scenes[-1].start_offset = PEOPLE_HEAD_SKIP
+                scenes[-1].estimated_cost_usd = round((d + 2) * price_per_sec, 2)
 
     chips: List[str] = []
     if case in ("C", "D") and project.amenities:
@@ -1471,7 +1482,7 @@ def derive_version(base: AdPlan, project: ProjectData, duration: int, logo_avail
         kind = "closeup" if s.source_type == "festive_closeup" else (s.render_type or "exterior")
         cands.append(_Cand(
             kind, None, s.camera_move, s.priority, 0, s.index, is_opening=s.is_opening,
-            cap=s.veo_duration, source=s, people=s.has_people,
+            cap=int((s.veo_duration - s.start_offset) // 2 * 2), source=s, people=s.has_people,
         ))
     chosen, durs, trim = _select_and_time(cands, base.case, duration, endcard, xf)
     scenes: List[PlannedScene] = []
@@ -1486,6 +1497,7 @@ def derive_version(base: AdPlan, project: ProjectData, duration: int, logo_avail
             render_type=src.render_type, camera_move=src.camera_move, prompt=src.prompt, label=src.label,
             estimated_cost_usd=0.0, is_opening=src.is_opening, priority=src.priority,
             reuses_scene_id=src.index, show_amenity_chips=src.show_amenity_chips, has_people=src.has_people,
+            start_offset=src.start_offset,
         ))
     if base.amenity_text_chips and not any(s.show_amenity_chips for s in scenes):
         rs = [s for s in scenes if s.source_type == "render_image"]
@@ -1583,7 +1595,8 @@ def validate_plan(plan: AdPlan, usable_renders: Optional[List[RenderInfo]] = Non
     if plan.endcard_duration != endcard_seconds(plan.requested_duration):
         errors.append("End card duration breaks rule 7.")
     planned = sum(
-        s.veo_duration if s.reuses_scene_id is None else math.ceil(s.duration_seconds) for s in veo
+        s.veo_duration if (s.reuses_scene_id is None and not s.start_offset) else math.ceil(s.duration_seconds)
+        for s in veo
     ) + plan.endcard_duration - len(veo) * plan.crossfade_seconds
     if not (plan.requested_duration - 1e-6 <= planned <= plan.requested_duration + 2 + 1e-6):
         errors.append(f"Scene durations add up to {planned:.1f}s; must be {plan.requested_duration}–{plan.requested_duration + 2}s (rule 8).")

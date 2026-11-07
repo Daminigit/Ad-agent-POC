@@ -205,12 +205,12 @@ def render_scene_badge_layer(
     return img
 
 
-def _trim_clip(src: Path, seconds: float, dest: Path) -> Path:
-    """Trim a clip to the planned length (shorter versions / last clip)."""
-    if _get_video_duration(src) <= seconds + 0.05:
+def _trim_clip(src: Path, seconds: float, dest: Path, start: float = 0.0) -> Path:
+    """Cut a clip to the planned length, optionally skipping `start` seconds (people fade-in)."""
+    if start <= 0 and _get_video_duration(src) <= seconds + 0.05:
         return src
     subprocess.run(
-        ["ffmpeg", "-y", "-i", str(src), "-t", f"{seconds:.2f}",
+        ["ffmpeg", "-y", "-ss", f"{start:.2f}", "-i", str(src), "-t", f"{seconds:.2f}",
          "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-c:a", "aac", str(dest)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
     )
@@ -242,7 +242,8 @@ def assemble_final_video(
         veo_scenes = plan.veo_scenes
         trimmed: List[Path] = []
         for i, (scene, clip) in enumerate(zip(veo_scenes, clip_paths)):
-            trimmed.append(_trim_clip(Path(clip), scene.duration_seconds, temp_dir / f"trim_{i}.mp4"))
+            trimmed.append(_trim_clip(Path(clip), scene.duration_seconds, temp_dir / f"trim_{i}.mp4",
+                                      start=getattr(scene, "start_offset", 0.0)))
         all_scene_paths = trimmed + [endcard_path]
 
         stitched_video = temp_dir / "stitched_raw.mp4"
