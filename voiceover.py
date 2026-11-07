@@ -245,7 +245,8 @@ def _generate_neural_indian_voice(text: str, dest_path: Path, voice_name: str = 
         import edge_tts
 
         async def _synth():
-            communicate = edge_tts.Communicate(text, voice_name, rate="+2%", pitch="+1Hz")
+            # Slightly slower and lower for a softer, calmer read
+            communicate = edge_tts.Communicate(text, voice_name, rate="-4%", pitch="-2Hz")
             await communicate.save(str(dest_path))
 
         asyncio.run(_synth())

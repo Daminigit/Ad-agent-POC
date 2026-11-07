@@ -43,6 +43,31 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageF
     return ImageFont.load_default()
 
 
+# ── Audio mix ────────────────────────────────────────────────────────────
+# Matched to the reference ad: a music bed that is always audible (≈ -25 LUFS when the voice
+# pauses), a soft voice on top (≈ 14 dB above the bed while speaking), and a loud, even master
+# (≈ -14 LUFS, like social-media ads).
+DEFAULT_MUSIC_LEVEL = 0.18   # music bed under the voice (of a -16 LUFS normalised track; slider 5–60 %)
+VOICE_LEVEL = 0.85           # voice a little softer than full level
+MASTER_LUFS = -14.0          # music-only videos
+MASTER_GAIN_DB = 5.0         # voice + music: fixed lift (keeps the voice/music balance), then a limiter
+_FMT = "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo"
+# Softer voice: no rumble, gentle treble cut (less sharp "s"), light compression for an even, calm read
+VOICE_SOFTEN = ("highpass=f=90,treble=g=-3:f=5500,"
+                "acompressor=threshold=-22dB:ratio=2.5:attack=20:release=250:makeup=2")   # makeup keeps loudness (≈ -17 LUFS)
+
+
+def audio_mix_filter(music_in: str, voice_in: Optional[str], music_level: float = DEFAULT_MUSIC_LEVEL) -> str:
+    """FFmpeg filter that mixes music (+ voice) into [aout]."""
+    music = f"[{music_in}]{_FMT},loudnorm=I=-16:TP=-2:LRA=7,volume={music_level:.2f}[mbed]"
+    master = f"volume={MASTER_GAIN_DB}dB,alimiter=limit=0.85:attack=5:release=50:level=disabled,{_FMT}[aout]"
+    if not voice_in:
+        return f"[{music_in}]{_FMT},loudnorm=I={MASTER_LUFS}:TP=-1.5:LRA=7,{_FMT}[aout]"
+    voice = f"[{voice_in}]{_FMT},{VOICE_SOFTEN},volume={VOICE_LEVEL:.2f}[vsoft]"
+    # normalize=0: amix would otherwise halve both tracks
+    return f"{music}; {voice}; [mbed][vsoft]amix=inputs=2:duration=first:normalize=0,{master}"
+
+
 def render_overlay_layer(
     width: int,
     height: int,
@@ -150,7 +175,7 @@ def assemble_final_video(
     music_path: Path,
     output_path: Path,
     voiceover_path: Optional[Path] = None,
-    music_duck_volume: float = 0.20,
+    music_duck_volume: float = DEFAULT_MUSIC_LEVEL,
     logo_path: Optional[str] = None,
 ) -> Tuple[Path, Dict[str, Any]]:
     """
@@ -210,15 +235,9 @@ def assemble_final_video(
         if has_voiceover:
             voice_idx = music_idx + 1
             inputs.extend(["-i", str(voiceover_path)])
-            filter_parts.append(
-                f"[{music_idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume={music_duck_volume:.2f}[mduck]; "
-                f"[{voice_idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.0[vclean]; "
-                f"[mduck][vclean]amix=inputs=2:duration=first:dropout_transition=2[aout]"
-            )
+            filter_parts.append(audio_mix_filter(f"{music_idx}:a", f"{voice_idx}:a", music_duck_volume))
         else:
-            filter_parts.append(
-                f"[{music_idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[aout]"
-            )
+            filter_parts.append(audio_mix_filter(f"{music_idx}:a", None))
 
         cmd = [
             "ffmpeg", "-y",

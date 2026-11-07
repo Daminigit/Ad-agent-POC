@@ -403,7 +403,8 @@ def build_facts(project: ProjectData) -> List[Fact]:
     if project.travel_times:
         disp = " | ".join(project.travel_times[:2])
         spoken = " and ".join(speak(t) for t in project.travel_times[:2])
-        facts.append(Fact("location", disp, _sentence(f"Just {spoken}")))
+        facts.append(Fact("location", disp, _sentence(f"Just {spoken}"),
+                          _sentence(f"Just {speak(project.travel_times[0])}")))
     # 4. Amenities (up to 3)
     if project.amenities:
         am = project.amenities[:3]
@@ -621,7 +622,7 @@ def build_voiceover_sentences(
             ordered += [s for p, s in sentences if p not in (-1, 1)]
             ordered += [s for p, s in sentences if p == 1]
             return ordered
-    return [openings[-1], main.spoken]
+    return [openings[-1], main.spoken_tiny or main.spoken_short or main.spoken]
 
 
 def split_sentences(script: str) -> List[str]:

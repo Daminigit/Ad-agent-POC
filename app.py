@@ -28,7 +28,7 @@ from planner import AdPlan, fmt_seconds, plan_all_versions, plan_video_ad, plan_
 from veo_client import VeoClient
 from music import build_music_track
 from endcard import create_endcard_clip, render_endcard_image
-from overlays import assemble_final_video
+from overlays import DEFAULT_MUSIC_LEVEL, assemble_final_video, audio_mix_filter
 from script_writer import generate_script_options, ScriptOption, get_script_timing_profile
 from voiceover import generate_indian_voiceover, voice_window_seconds
 
@@ -567,12 +567,12 @@ if project_data_obj:
     with a_col3:
         music_volume = st.slider(
             "🎚️ Music Volume",
-            min_value=10,
-            max_value=40,
-            value=20,
-            step=5,
+            min_value=5,
+            max_value=60,
+            value=int(DEFAULT_MUSIC_LEVEL * 100),
+            step=1,
             format="%d%%",
-            help="Music volume level under voiceover. Default: 20%.",
+            help="Music level under the voiceover. Default 18% – music always audible, voice clearly on top.",
             key="music_vol_slider",
         )
 
@@ -651,10 +651,7 @@ if project_data_obj:
                         "ffmpeg", "-y",
                         "-i", str(temp_music),
                         "-i", str(temp_vo),
-                        "-filter_complex",
-                        f"[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume={duck_level:.2f}[mduck];"
-                        f"[1:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,volume=1.0[vclean];"
-                        f"[mduck][vclean]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                        "-filter_complex", audio_mix_filter("0:a", "1:a", duck_level),
                         "-map", "[aout]",
                         "-t", str(video_length),
                         "-c:a", "libmp3lame", "-b:a", "192k",
@@ -924,7 +921,7 @@ if generate_video_clicked:
             # Step 5: Stitching & Legal Overlays with Audio Ducking
             st.write("⚖️ Trimming clips, crossfading, ducking music, burning RERA bar, labels & disclaimers...")
             final_file = output_dir / f"{clean_pname}_{clean_fest}_{dur}s_{clean_aspect}.mp4"
-            duck_vol = (music_volume / 100.0) if voiceover_dest else 1.0
+            duck_vol = music_volume / 100.0
             out_path, checks = assemble_final_video(
                 plan=pv,
                 project=project_data_obj,
