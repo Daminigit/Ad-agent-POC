@@ -9,6 +9,7 @@ brand styles, and review status.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,6 +34,47 @@ class RenderInfo:
 
 
 DEFAULT_DISCLAIMER = "All images are artist's impressions. T&C apply."
+
+
+# Infrastructure / services that are not selling amenities (never spoken or shown as chips)
+_INFRA_WORDS = {
+    "gate", "entrance", "lobby", "cctv", "security", "cabin", "parking", "car", "vehicular", "vehicle",
+    "podium", "stp", "sewage", "transformer", "generator", "dg", "lift", "lifts", "elevator", "road",
+    "roads", "compound", "boundary", "wall", "borewell", "meter", "paving", "intercom", "power",
+    "backup", "water", "supply", "fire", "fighting", "rainwater", "harvesting", "solar", "waste",
+    "management", "drainage", "plumbing", "wiring", "amenities", "facilities",
+}
+# Same thing said twice ("Club House & Gymnasium", "State of the Art Club House", "Fitness Centre")
+_AMENITY_GROUPS = {
+    "clubhouse": ("club house", "clubhouse", "club-house"),
+    "gym": ("gym", "gymnasium", "fitness"),
+    "pool": ("pool",),
+    "play": ("play area", "play zone", "playground", "kids play", "children's play"),
+    "jogging": ("jogging", "walking track"),
+}
+_PUFFERY = re.compile(r"^\s*(state[- ]of[- ]the[- ]art|world[- ]class|luxurious|luxury|premium|grand|exclusive)\s+", re.I)
+
+
+def lifestyle_amenities(items: List[str]) -> List[str]:
+    """Keep amenities a buyer would enjoy; drop gates, lobbies, CCTV, parking, podiums and repeats."""
+    out: List[str] = []
+    seen_groups: set = set()
+    seen_names: set = set()
+    for item in items:
+        words = set(re.findall(r"[a-z]+", item.lower()))
+        if words & _INFRA_WORDS:
+            continue
+        name = _PUFFERY.sub("", item).strip()
+        low = name.lower()
+        groups = {g for g, keys in _AMENITY_GROUPS.items() if any(k in low for k in keys)}
+        if groups and groups <= seen_groups:
+            continue
+        if low in seen_names:
+            continue
+        seen_groups |= groups
+        seen_names.add(low)
+        out.append(name)
+    return out
 
 
 def is_valid_content(val: Any) -> bool:
@@ -296,7 +338,7 @@ def parse_project_json(data: Dict[str, Any] | str | Path) -> ProjectData:
     # Amenities (optional list of amenities)
     raw_amenities = raw.get("amenities") or raw.get("amenity_list") or proj_block.get("amenities") or []
     if isinstance(raw_amenities, list):
-        amenities = [str(a).strip() for a in raw_amenities if is_valid_content(str(a))]
+        amenities = lifestyle_amenities([str(a).strip() for a in raw_amenities if is_valid_content(str(a))])
     else:
         amenities = []
     if not amenities:

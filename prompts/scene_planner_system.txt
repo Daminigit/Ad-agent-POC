@@ -77,6 +77,9 @@ has enough content. Never use the same fact twice in one voiceover.
   or "near" claims.
 - location.marketing_name missing -> use location.city; if both missing, skip location.
 - amenities missing -> no amenity text chips; in 60 s use more location/unit lines.
+- Never mention infrastructure as an amenity: entrance gates, lobbies, CCTV, security,
+  car parking, podiums, lifts, power backup, STP. Use only lifestyle amenities, and never
+  name the same amenity twice (e.g. "Club House" and "State of the Art Club House").
 - site_visits missing -> CTA "Call {contacts.marketing.phone} to know more"; if the phone is
   also missing -> CTA "Enquire today".
 - possession / construction_status missing -> don't mention possession.

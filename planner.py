@@ -294,7 +294,9 @@ def speak(text: str) -> str:
     t = re.sub(r"\bsq\.?\s*ft\.?", "square feet", t, flags=re.I)
     t = re.sub(r"\bmins?\b\.?", "minutes", t)
     t = re.sub(r"\bhrs?\b\.?", "hours", t)
-    t = re.sub(r"\bkm\b", "kilometres", t)
+    t = re.sub(r"(\d+)\.0+\s*km\b", r"\1 km", t)          # "1.0 km" -> "1 km" (names like "2.0" keep "point o")
+    t = re.sub(r"(?<![\d.])1\s*km\b", "one kilometre", t)
+    t = re.sub(r"\s*km\b", " kilometres", t)
     t = re.sub(r"\s*%", " percent", t)
     t = re.sub(r"(\d)\s*BHK\b", r"\1 BHK", t, flags=re.I)
     t = re.sub(r"\bBHK\b", "B-H-K", t, flags=re.I)
@@ -406,7 +408,7 @@ def build_facts(project: ProjectData) -> List[Fact]:
         am = project.amenities[:3]
         disp = " • ".join(am)
         spoken = am[0] if len(am) == 1 else ", ".join(am[:-1]) + " and " + am[-1]
-        facts.append(Fact("amenities", disp, _sentence(f"With {spoken.lower()}")))
+        facts.append(Fact("amenities", disp, _sentence(f"With {spoken.lower().replace(' & ', ' and ')}")))
     # 5. Open space / land
     pct, acres = project.open_space_pct_min, project.land_area_acres
     if pct and acres:
@@ -576,19 +578,23 @@ def build_voiceover_sentences(
             if "amenities" in used and len(project.amenities) > 3:
                 for i, (p, s) in enumerate(body):
                     if s.startswith("With "):
-                        am = [a.lower() for a in project.amenities[:4]]
+                        am = [a.lower().replace(" & ", " and ") for a in project.amenities[:4]]
                         body[i] = (p, _sentence("With " + ", ".join(am[:-1]) + " and " + am[-1]))
             elif "amenities" not in used and project.amenities:
-                am = [a.lower() for a in project.amenities[:4]]
+                am = [a.lower().replace(" & ", " and ") for a in project.amenities[:4]]
                 spoken = am[0] if len(am) == 1 else ", ".join(am[:-1]) + " and " + am[-1]
                 body.append((7, _sentence(f"With {spoken}")))
             if "possession" not in used and project.possession:
                 body.append((8, _sentence(speak(f"Possession {format_possession(project.possession)}"))))
             if festival not in NEUTRAL_THEMES:
                 body.append((9, f"Celebrate this {festival} in a home of your own."))
-        if main.kind != "price" and not project.lowest_price_inr:
-            body.append((5, "Enquire now for price details."))
-        body.append((1, cta_spoken(project)))   # CTA (not in 10 s: it is on the end card)
+        cta = cta_spoken(project)
+        if not project.lowest_price_inr:
+            if cta == "Enquire today.":
+                cta = "Enquire today for price details."
+            else:
+                body.append((5, "Enquire now for price details."))
+        body.append((1, cta))   # CTA (not in 10 s: it is on the end card)
 
     # Never repeat a sentence
     seen, uniq = set(), []
@@ -1496,8 +1502,11 @@ def _agent_user_message(project: ProjectData, renders: List[RenderInfo], duratio
         }
         for r in renders
     ]
+    # Send only lifestyle amenities (no gates, lobbies, CCTV, parking, podiums)
+    project_json = dict(project.raw_data)
+    project_json["amenities"] = list(project.amenities)
     msg = (
-        f"project: {json.dumps(project.raw_data, ensure_ascii=False)}\n"
+        f"project: {json.dumps(project_json, ensure_ascii=False)}\n"
         f"renders: {json.dumps(render_list, ensure_ascii=False)}\n"
         f"duration_seconds: {duration}\n"
         f"festival: {festival}\n"
