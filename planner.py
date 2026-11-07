@@ -758,6 +758,9 @@ _FESTIVE_ACTION = {
     "New Year": "lights a few candles",
 }
 _FAMILY = "an Indian family in festive traditional clothes"
+# Family theme: only these four people (husband, wife and two children)
+_NUCLEAR_FAMILY = ("an Indian husband and wife with their two young children, a boy and a girl, all four in "
+                   "festive traditional clothes")
 PEOPLE_GUARD = (" The people are added naturally into the scene; do not change, move or cover the "
                 "architecture, furniture or layout.")
 
@@ -769,8 +772,8 @@ def render_people(render_type: str, festival: str) -> str:
         if festival == "None":
             line = f"{woman[0].upper() + woman[1:]} walks calmly through the room and pauses by the window."
         elif festival == "Family":
-            line = (f"{woman[0].upper() + woman[1:]} shares a warm moment with her family in festive "
-                    "traditional clothes, parents, grandparents and two children smiling together.")
+            line = (f"{_NUCLEAR_FAMILY[0].upper() + _NUCLEAR_FAMILY[1:]} share a warm moment together on "
+                    "the sofa, smiling; the wife wears a silk saree. Only these four people, no one else.")
         else:
             action = _FESTIVE_ACTION.get(festival, "lights a brass lamp")
             line = (f"{woman[0].upper() + woman[1:]} {action}, while {_FAMILY} smiles and "
@@ -779,8 +782,8 @@ def render_people(render_type: str, festival: str) -> str:
         if festival == "None":
             line = "Two Indian professionals in smart business suits walk and talk calmly around it."
         elif festival == "Family":
-            line = (f"{_FAMILY[0].upper() + _FAMILY[1:]} enjoys it together, children laughing, with "
-                    f"{woman} smiling beside them.")
+            line = (f"{_NUCLEAR_FAMILY[0].upper() + _NUCLEAR_FAMILY[1:]} enjoy it together, the two "
+                    "children laughing; the wife wears a silk saree. Only these four people, no one else.")
         else:
             line = (f"A few Indian families in festive traditional clothes stroll and chat around it, "
                     f"and {woman} greets them warmly.")
@@ -866,11 +869,11 @@ _CLOSEUPS: Dict[str, List[Tuple[str, str]]] = {
         ("thumbs up", "Close-up of {p} giving a warm, reassuring nod, background in soft bokeh."),
     ],
     "Family": [
-        ("family in festive clothes", "Close-up of an Indian family in festive traditional clothes laughing together, faces softly lit, background softly blurred."),
+        ("family of four", "Close-up of an Indian husband and wife with their two young children, all four in festive traditional clothes, laughing together, faces softly lit, background softly blurred."),
         ("smile in a saree", "Close-up of {p} smiling as she adjusts her saree pallu, warm light, background completely blurred."),
-        ("sweets with family", "Close-up of a plate of Indian sweets on a festive cloth, family hands in festive sleeves reaching in, background blurred."),
-        ("holding hands", "Close-up of {p}'s hand holding a small child's hand, the child in festive traditional clothes, warm light, background softly blurred."),
-        ("grandparent blessing", "Close-up of a grandparent in a traditional kurta gently blessing a child in festive clothes, background in soft bokeh."),
+        ("sweets with the family", "Close-up of a plate of Indian sweets on a festive cloth, the hands of a husband, wife and their two children in festive sleeves reaching in, background blurred."),
+        ("holding hands", "Close-up of {p}'s hand holding her young son's hand, the boy in festive traditional clothes, warm light, background softly blurred."),
+        ("father and daughter", "Close-up of an Indian father in a festive kurta smiling with his young daughter in a festive lehenga, background in soft bokeh."),
     ],
 }
 CLOSEUP_GUARD = " Tight framing on people, hands and decorations only: no full room, no building, no amenity visible."

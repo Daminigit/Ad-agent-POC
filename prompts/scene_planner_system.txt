@@ -165,8 +165,9 @@ Render scenes (veo_mode "image_to_video", label "Artist's impression"):
   - Festival: {person} doing the festival ritual (e.g. lighting a diya), with an Indian
     family in festive traditional clothes nearby; at amenities, a few Indian families in
     festive traditional clothes strolling, and {person} greeting them.
-  - Family: {person} with her family in festive traditional clothes (parents,
-    grandparents, two children).
+  - Family: ONLY an Indian husband and wife with their two young children (a boy and a
+    girl), all in festive traditional clothes, the wife in a silk saree. No grandparents
+    or other people. Family close-ups use only these four people too.
   - None (standard ad): Indian professionals in smart business suits.
 camera_move options: drone push-in, slow orbit, slow pan left to right, slow tilt up,
 gentle dolly-in. Use a different one each time a render is reused.
