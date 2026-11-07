@@ -23,6 +23,7 @@ class RenderInfo:
     needs_review: bool = False
     notes: str = ""
     description: str = ""              # What the image shows (sent to the scene planner)
+    focus: str = "center"              # Part of a landscape render kept for 9:16 reels: left / center / right
 
     @property
     def path(self) -> Path:

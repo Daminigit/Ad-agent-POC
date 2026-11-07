@@ -49,6 +49,7 @@ def load_renders_from_dir(renders_dir: Path) -> List[RenderInfo]:
                         approved=it.get("approved", True),
                         needs_review=it.get("needs_review", False),
                         description=it.get("description", ""),
+                        focus=it.get("focus", "center"),
                     ))
             return renders
         except Exception as e:
@@ -209,6 +210,7 @@ def main():
                 prompt=s.prompt, duration=s.veo_duration, aspect=args.aspect,
                 resolution=args.resolution, image_path=s.render_path, output_dest=dest,
                 with_audio=args.veo_ambient,
+                focus=next((r.focus for r in approved_renders if r.filepath == s.render_path), "center"),
             ))
             print(f"    ✓ Scene {s.index} ({s.veo_mode}) ready")
 

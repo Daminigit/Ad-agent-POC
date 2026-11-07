@@ -156,13 +156,25 @@ def render_endcard_image(
         elif project.available_units:
             offer_line = f"Spacious {units_str} Homes"
 
+    max_w = width * 0.84   # stay inside the card border
+
     def _line(text: str, size: float, font_name: str, colour: Any, gap: float) -> None:
+        """Draw a centred line; split long "a | b" lines and shrink text so it always fits the card."""
         nonlocal y_cursor
         if not text:
             return
-        draw.text((width // 2, y_cursor), text, font=_get_font(font_name, int(height * size)),
-                  fill=colour, anchor="mm")
-        y_cursor += int(height * gap)
+        font = _get_font(font_name, int(height * size))
+        parts = [text]
+        if draw.textlength(text, font=font) > max_w and " | " in text:
+            parts = [x.strip() for x in text.split(" | ") if x.strip()]
+        for part in parts:
+            px = int(height * size)
+            f = _get_font(font_name, px)
+            while draw.textlength(part, font=f) > max_w and px > int(height * size * 0.55):
+                px -= 1
+                f = _get_font(font_name, px)
+            draw.text((width // 2, y_cursor), part, font=f, fill=colour, anchor="mm")
+            y_cursor += int(height * gap * (0.8 if len(parts) > 1 and part != parts[-1] else 1.0))
 
     vertical = aspect != "16:9"
     # 2. Greeting

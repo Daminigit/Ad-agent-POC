@@ -351,12 +351,26 @@ if uploaded_render_files:
             is_approved = st.checkbox("Approved for ads", value=True, key=f"appr_{idx}")
             r_desc = st.text_input("What it shows", value="", key=f"rdesc_{idx}",
                                    placeholder="e.g. 3 towers at dusk")
+            r_focus = "center"
+            if aspect_ratio == "9:16":
+                r_focus = st.radio(
+                    "9:16 crop – keep which part?", options=["left", "center", "right"], index=1,
+                    horizontal=True, key=f"rfocus_{idx}",
+                    help="Landscape renders are cropped to fill the vertical frame (nothing is added).",
+                )
+                try:
+                    from veo_client import fit_to_aspect
+                    st.image(fit_to_aspect(r_dest.read_bytes(), "9:16", r_focus), width=110,
+                             caption="9:16 crop")
+                except Exception:
+                    pass
 
             active_renders.append(RenderInfo(
                 filepath=str(r_dest),
                 render_type=r_type,
                 approved=is_approved,
                 description=r_desc,
+                focus=r_focus,
             ))
 
 
@@ -867,6 +881,7 @@ if generate_video_clicked:
                         image_path=s.render_path,
                         output_dest=dest,
                         with_audio=veo_ambient,
+                        focus=next((r.focus for r in active_renders if r.filepath == s.render_path), "center"),
                     )
                 except Exception as e:
                     st.warning(f"⚠️ Veo live render notice: {e}. Using cinematic motion fallback.")

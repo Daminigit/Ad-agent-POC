@@ -54,6 +54,35 @@ def with_ambient_audio(prompt: str) -> str:
 PERSON_GENERATION = os.getenv("VEO_PERSON_GENERATION", "allow_all")
 
 
+FOCUS_X = {"left": 0.25, "center": 0.5, "centre": 0.5, "right": 0.75}
+
+
+def fit_to_aspect(image_bytes: bytes, aspect_ratio: str, focus: str = "center") -> bytes:
+    """Crop the render to the video's shape (e.g. a 16:9 render for a 9:16 reel) so Veo fills the
+    frame instead of adding black bars. Only crops the real image – nothing is added.
+    focus: which part of a landscape render to keep for 9:16 – left, center or right."""
+    from io import BytesIO
+    from PIL import Image
+
+    img = Image.open(BytesIO(image_bytes)).convert("RGB")
+    w, h = img.size
+    target = 16 / 9 if aspect_ratio == "16:9" else 9 / 16
+    if abs(w / h - target) < 0.02:
+        return image_bytes
+    if w / h > target:            # too wide: keep a vertical slice
+        new_w = int(round(h * target))
+        cx = FOCUS_X.get((focus or "center").lower(), 0.5) * w
+        x0 = int(min(max(cx - new_w / 2, 0), w - new_w))
+        img = img.crop((x0, 0, x0 + new_w, h))
+    else:                         # too tall: keep a horizontal band, slightly above centre
+        new_h = int(round(w / target))
+        y0 = int(min(max(0.45 * h - new_h / 2, 0), h - new_h))
+        img = img.crop((0, y0, w, y0 + new_h))
+    out = BytesIO()
+    img.save(out, format="JPEG", quality=94)
+    return out.getvalue()
+
+
 def _prepare_image(image_bytes: bytes, max_side: int = 1920) -> bytes:
     """Re-encode the render as a JPEG no larger than 1920 px (keeps requests small)."""
     from io import BytesIO
@@ -131,6 +160,7 @@ class VeoClient:
         image_path: Optional[str] = None,
         output_dest: Optional[Path] = None,
         with_audio: bool = False,
+        focus: str = "center",
     ) -> Path:
         """
         Generate a video clip using Veo 3.1 Fast (or retrieve from cache).
@@ -145,7 +175,12 @@ class VeoClient:
 
         image_bytes = None
         if image_path and Path(image_path).exists():
-            image_bytes = Path(image_path).read_bytes()
+            # Crop to the video's shape first (9:16 reels from landscape renders) – also part of the cache key
+            image_bytes = fit_to_aspect(Path(image_path).read_bytes(), aspect_ratio, focus)
+            crop_path = CACHE_DIR / f"crop_{hashlib.sha256(image_bytes).hexdigest()[:16]}.jpg"
+            if not crop_path.exists():
+                crop_path.write_bytes(image_bytes)
+            image_path = str(crop_path)
 
         # 1. Check Cache
         api_prompt = with_ambient_audio(prompt) if with_audio else prompt
@@ -344,6 +379,9 @@ class VeoClient:
         dest_file.parent.mkdir(parents=True, exist_ok=True)
 
         if image_path and Path(image_path).exists():
+            cropped = fit_to_aspect(Path(image_path).read_bytes(), aspect_ratio, "center")
+            image_path = str(dest_file.with_name(dest_file.stem + "_src.jpg"))
+            Path(image_path).write_bytes(cropped)
             # Ken Burns slow drone zoom on input render image
             cmd = [
                 "ffmpeg", "-y",
