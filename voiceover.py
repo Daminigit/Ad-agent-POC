@@ -92,7 +92,7 @@ def generate_indian_voiceover(
     Supports 'en-IN-NeerjaNeural' (female) and 'en-IN-PrabhatNeural' (male).
     Applies phonetic tuning for authentic Indian pronunciation of terms like 'laakh'.
     max_seconds: the time available before the end card. Leading/trailing silence is trimmed and,
-    if the voice is still too long, it is sped up slightly (at most 12%) so it ends in time.
+    if the voice is still too long, it is sped up slightly (at most 15%) so it ends in time.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_raw = output_path.parent / f"raw_voice_{output_path.stem}.mp3"
@@ -105,11 +105,13 @@ def generate_indian_voiceover(
         or ""
     ).strip()
 
+    global LAST_ENGINE
     success = False
 
-    # 1. Try Gemini Native Audio Model
-    if key and not key.startswith("your_"):
-        success = _try_gemini_native_tts(spoken_text, temp_raw, key)
+    # 1. Gemini voice on Vertex AI (natural, soft; checks "two point oh")
+    success = _try_gemini_vertex_tts(spoken_text, temp_raw, voice_name)
+    if success:
+        LAST_ENGINE = f"Gemini {GEMINI_VOICES['male' if 'prabhat' in voice_name.lower() else 'female']}"
 
     # 2. Try Google Cloud Neural Text-to-Speech with Indian English (en-IN)
     if not success and key and not key.startswith("your_"):
@@ -120,6 +122,8 @@ def generate_indian_voiceover(
     # 3. Studio-grade Neural Indian-English voice (edge-tts)
     if not success:
         success = _generate_neural_indian_voice(spoken_text, temp_raw, voice_name=voice_name)
+        if success:
+            LAST_ENGINE = f"edge-tts {voice_name}"
 
     # 4. Fallback to basic gTTS en-IN if neural unavailable
     if not success:
@@ -134,7 +138,7 @@ def generate_indian_voiceover(
         if max_seconds:
             trimmed_len = _probe_trimmed_seconds(temp_raw, ",".join(filters))
             if trimmed_len and trimmed_len > max_seconds:
-                filters.append(f"atempo={min(1.12, trimmed_len / max_seconds):.3f}")
+                filters.append(f"atempo={min(1.15, trimmed_len / max_seconds):.3f}")
         # 0.3 s lead-in so the first word doesn't clip on the crossfade
         filters += ["adelay=300|300", "loudnorm=I=-16:TP=-1.5:LRA=11"]
         cmd = [
@@ -174,41 +178,100 @@ def voice_window_seconds(plan) -> float:
     return max(3.0, sum(s.duration_seconds for s in veo) - len(veo) * plan.crossfade_seconds - 0.3)
 
 
-def _try_gemini_native_tts(text: str, dest_path: Path, api_key: str) -> bool:
-    """Invoke Google Gemini Native Audio generation (gemini-2.5-flash-preview-tts / gemini-3.8-flash-tts)."""
-    models = ["gemini-2.5-flash-preview-tts", "gemini-3.8-flash-tts", "gemini-3.1-flash-tts-preview"]
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        payload = {
-            "contents": [{
-                "parts": [{
-                    "text": f"Read this luxury real-estate advertisement voiceover in a warm, welcoming, and elegant Indian English accent: {text}"
-                }]
-            }],
-            "generationConfig": {
-                "responseModalities": ["AUDIO"],
-                "speechConfig": {
-                    "voiceConfig": {
-                        "prebuiltVoiceConfig": {
-                            "voiceName": "Puck"
-                        }
-                    }
-                }
-            }
-        }
-        try:
-            resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=15)
-            if resp.status_code == 200:
-                data = resp.json()
-                part = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0]
-                inline = part.get("inlineData", {})
-                b64_audio = inline.get("data")
-                if b64_audio:
-                    dest_path.write_bytes(base64.b64decode(b64_audio))
-                    return True
-        except Exception:
-            continue
-    return False
+GEMINI_TTS_MODEL = os.getenv("GEMINI_TTS_MODEL", "gemini-2.5-flash-tts")
+# App voice choice -> Gemini prebuilt voice (picked by ear: Achernar = soft female, Charon = calm male)
+GEMINI_VOICES = {"female": os.getenv("GEMINI_TTS_FEMALE", "Achernar"), "male": os.getenv("GEMINI_TTS_MALE", "Charon")}
+# Tested: the brisk direction fits 10 s ads, and "two-point-O" was said "two point oh" in every take
+GEMINI_STYLE = ("Read this as a soft, warm, elegant Indian-English voiceover for a premium real-estate ad, at a lively, "
+                "slightly brisk commercial pace with no long pauses. Pronounce '2.0' as 'two point oh' (the letter O), "
+                "never 'zero'. Say every word exactly as written: ")
+LAST_ENGINE = ""   # which engine made the last voiceover (shown in the app)
+
+
+def _gemini_tts_once(text: str, wav_path: Path, voice: str) -> bool:
+    """One Gemini TTS call on Vertex AI (service account). Writes a WAV file."""
+    from gemini_text import _vertex_token
+
+    project = os.getenv("GCP_PROJECT_ID", "").strip()
+    token = _vertex_token() if project else None
+    if not (project and token):
+        return False
+    url = (f"https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google/"
+           f"models/{GEMINI_TTS_MODEL}:generateContent")
+    body = {"contents": [{"role": "user", "parts": [{"text": GEMINI_STYLE + text}]}],
+            "generationConfig": {"responseModalities": ["AUDIO"],
+                                 "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}}}}
+    try:
+        r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=120)
+        if r.status_code != 200:
+            print(f"[Voiceover] Gemini TTS HTTP {r.status_code}")
+            return False
+        inline = r.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
+        rate = 24000
+        m = re.search(r"rate=(\d+)", inline.get("mimeType", ""))
+        if m:
+            rate = int(m.group(1))
+        pcm = wav_path.with_suffix(".pcm")
+        pcm.write_bytes(base64.b64decode(inline["data"]))
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(rate), "-ac", "1",
+                        "-i", str(pcm), str(wav_path)], check=True)
+        pcm.unlink(missing_ok=True)
+        return wav_path.exists() and wav_path.stat().st_size > 1000
+    except Exception as exc:
+        print(f"[Voiceover] Gemini TTS note: {exc}")
+        return False
+
+
+def _heard_point_zero(wav_path: Path) -> bool:
+    """Listen back (Gemini) and report whether the voice said 'point zero' instead of 'point oh'."""
+    from gemini_text import _vertex_token
+
+    project = os.getenv("GCP_PROJECT_ID", "").strip()
+    token = _vertex_token()
+    if not (project and token):
+        return False
+    small = wav_path.with_name(wav_path.stem + "_16k.wav")
+    try:
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav_path), "-ac", "1", "-ar", "16000",
+                        str(small)], check=True)
+        url = (f"https://aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/google/"
+               "models/gemini-3-flash-preview:generateContent")
+        body = {"contents": [{"role": "user", "parts": [
+            {"inlineData": {"mimeType": "audio/wav", "data": base64.b64encode(small.read_bytes()).decode()}},
+            {"text": "Transcribe exactly what is spoken, writing numbers as the words you hear "
+                     "(e.g. 'two point zero' vs 'two point oh'). Output only the transcript."}]}],
+            "generationConfig": {"maxOutputTokens": 1024, "temperature": 0}}
+        r = requests.post(url, headers={"Authorization": f"Bearer {token}"}, json=body, timeout=60)
+        parts = r.json()["candidates"][0]["content"]["parts"]
+        heard = " ".join(x.get("text", "") for x in parts if not x.get("thought")).lower()
+        return bool(re.search(r"point\s+zero|point\s+0\b|\b\d+\.0\b", heard))
+    except Exception:
+        return False
+    finally:
+        small.unlink(missing_ok=True)
+
+
+def _try_gemini_vertex_tts(text: str, dest_path: Path, voice_name: str) -> bool:
+    """Gemini voice; when the text says 'point oh', check it was said that way (up to 2 retries)."""
+    gender = "male" if ("prabhat" in voice_name.lower() or "male" in voice_name.lower()
+                        and "female" not in voice_name.lower()) else "female"
+    voice = GEMINI_VOICES[gender]
+    wav = dest_path.with_suffix(".wav")
+    check = bool(re.search(r"point\s+oh", text, re.I))
+    # Gemini says "two-point-O" as "two point oh" far more reliably than "two point oh"
+    text = re.sub(r"\b(\w+)\s+point\s+oh\b", r"\1-point-O", text, flags=re.I)
+    for attempt in range(3):
+        if not _gemini_tts_once(text, wav, voice):
+            return False
+        if not check or not _heard_point_zero(wav):
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav), str(dest_path)], check=True)
+            wav.unlink(missing_ok=True)
+            return True
+        print(f"[Voiceover] Gemini said 'point zero' – retrying ({attempt + 1}/2)")
+    # Still 'zero' after retries: keep the last take rather than failing
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav), str(dest_path)], check=True)
+    wav.unlink(missing_ok=True)
+    return True
 
 
 def _try_google_cloud_tts(text: str, dest_path: Path, api_key: str, voice_name: str = "en-IN-Neural2-D") -> bool:

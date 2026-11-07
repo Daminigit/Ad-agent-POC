@@ -541,8 +541,8 @@ if project_data_obj:
         voice_choice = st.selectbox(
             "🎙️ Voiceover Actor",
             options=[
-                "👩 Neerja (Female — Warm & Elegant)",
-                "👨 Prabhat (Male — Deep & Authoritative)",
+                "👩 Achernar (Female — Soft & Warm, Gemini voice)",
+                "👨 Charon (Male — Calm & Clear, Gemini voice)",
                 "🚫 None (Instrumental Music Only)",
             ],
             index=0,
@@ -591,7 +591,7 @@ if project_data_obj:
     btn_prev_mix = prev_col3.button("🎧 Preview Complete Mix", use_container_width=True, type="secondary")
 
     # Determine voice name
-    selected_voice_name = "en-IN-PrabhatNeural" if "Prabhat" in voice_choice else "en-IN-NeerjaNeural"
+    selected_voice_name = "en-IN-PrabhatNeural" if "(Male" in voice_choice else "en-IN-NeerjaNeural"
     voice_enabled = "None" not in voice_choice
     selected_track_type = "sitar" if "Sitar" in music_choice else ("piano" if "Piano" in music_choice else None)
     duck_level = music_volume / 100.0
@@ -915,7 +915,7 @@ if generate_video_clicked:
                 st.write(f"🎙️ Synthesizing voiceover ({voice_choice.split('(')[0].strip()})...")
                 voiceover_dest = cache_dir / f"web_voice_{dur}s.mp3"
                 try:
-                    chosen_voice_name = "en-IN-PrabhatNeural" if "Prabhat" in voice_choice else "en-IN-NeerjaNeural"
+                    chosen_voice_name = "en-IN-PrabhatNeural" if "(Male" in voice_choice else "en-IN-NeerjaNeural"
                     generate_indian_voiceover(
                         script_text=script_to_speak,
                         output_path=voiceover_dest,
@@ -923,6 +923,11 @@ if generate_video_clicked:
                         voice_name=chosen_voice_name,
                         max_seconds=voice_window_seconds(pv),
                     )
+                    import voiceover as _vo
+                    if _vo.LAST_ENGINE.startswith("Gemini"):
+                        st.write(f"✅ Voice made with {_vo.LAST_ENGINE}")
+                    else:
+                        st.warning(f"⚠️ Gemini voice unavailable – used the backup voice ({_vo.LAST_ENGINE}).")
                 except Exception as e:
                     st.warning(f"Voiceover warning: {e}. Video will proceed with background music track.")
                     voiceover_dest = None
