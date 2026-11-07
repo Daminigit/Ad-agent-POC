@@ -44,6 +44,10 @@ def _phonetic_clean_for_speech(text: str) -> str:
     # 3. Currency symbol removal (e.g., ₹96 -> 96)
     text = re.sub(r"₹\s*", "", text)
 
+    # 3b. Decimals as spoken in India: "2.0" -> "two point o", "1.42" -> "one point four two"
+    from planner import number_words
+    text = re.sub(r"(?<![\d.])(\d+\.\d+)(?![\d.])", lambda m: number_words(m.group(1)), text)
+
     # 4. Clean separation of BHK letters so it is spoken as 'B-H-K'
     text = re.sub(r"\bBHK\b", "B-H-K", text)
     text = re.sub(r"\bbhk\b", "B-H-K", text)
@@ -63,11 +67,14 @@ def generate_indian_voiceover(
     output_path: Path,
     api_key: Optional[str] = None,
     voice_name: str = "en-IN-NeerjaNeural",
+    max_seconds: Optional[float] = None,
 ) -> Path:
     """
     Generate an Indian-English voiceover from the approved script text.
     Supports 'en-IN-NeerjaNeural' (female) and 'en-IN-PrabhatNeural' (male).
     Applies phonetic tuning for authentic Indian pronunciation of terms like 'laakh'.
+    max_seconds: the time available before the end card. Leading/trailing silence is trimmed and,
+    if the voice is still too long, it is sped up slightly (at most 12%) so it ends in time.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_raw = output_path.parent / f"raw_voice_{output_path.stem}.mp3"
@@ -100,12 +107,22 @@ def generate_indian_voiceover(
     if not success:
         success = _generate_gtts_indian(spoken_text, temp_raw)
 
-    # 4. Final audio normalization via FFmpeg
+    # 4. Final audio normalization via FFmpeg (+ silence trim and gentle speed fit)
     if success and temp_raw.exists():
+        filters = [
+            "silenceremove=start_periods=1:start_threshold=-45dB",
+            "areverse", "silenceremove=start_periods=1:start_threshold=-45dB", "areverse",
+        ]
+        if max_seconds:
+            trimmed_len = _probe_trimmed_seconds(temp_raw, ",".join(filters))
+            if trimmed_len and trimmed_len > max_seconds:
+                filters.append(f"atempo={min(1.12, trimmed_len / max_seconds):.3f}")
+        # 0.3 s lead-in so the first word doesn't clip on the crossfade
+        filters += ["adelay=300|300", "loudnorm=I=-16:TP=-1.5:LRA=11"]
         cmd = [
             "ffmpeg", "-y",
             "-i", str(temp_raw),
-            "-filter:a", "loudnorm=I=-16:TP=-1.5:LRA=11",
+            "-filter:a", ",".join(filters),
             "-ar", "44100", "-ac", "2",
             "-c:a", "libmp3lame", "-b:a", "192k",
             str(output_path),
@@ -115,6 +132,28 @@ def generate_indian_voiceover(
         return output_path
 
     raise RuntimeError("Failed to generate voiceover audio.")
+
+
+def _probe_trimmed_seconds(path: Path, filters: str) -> Optional[float]:
+    """Length of the audio after the silence-trim filters."""
+    try:
+        res = subprocess.run(
+            ["ffmpeg", "-i", str(path), "-af", filters, "-f", "null", "-"],
+            capture_output=True, text=True, check=True,
+        )
+        times = re.findall(r"time=(\d+):(\d+):(\d+\.\d+)", res.stderr)
+        if times:
+            h, m, sec = times[-1]
+            return int(h) * 3600 + int(m) * 60 + float(sec)
+    except Exception:
+        pass
+    return None
+
+
+def voice_window_seconds(plan) -> float:
+    """Seconds of scenes before the end card (what the voice has to fit into)."""
+    veo = [s for s in plan.scenes if s.source_type != "end_card"]
+    return max(3.0, sum(s.duration_seconds for s in veo) - len(veo) * plan.crossfade_seconds - 0.3)
 
 
 def _try_gemini_native_tts(text: str, dest_path: Path, api_key: str) -> bool:

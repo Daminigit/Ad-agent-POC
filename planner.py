@@ -46,7 +46,8 @@ VEO_PRICING = {
 
 VEO_CLIP_LENGTHS = (4, 6, 8)
 DEFAULT_CROSSFADE = 0.5
-WORDS_PER_SECOND = 2.5
+WORDS_PER_SECOND = 2.0   # measured pace of the Indian-English voice (~2.1 words/s once silence is trimmed)
+SPEC_MAX_WORDS = {10: 17, 20: 40, 60: 120}
 
 LABEL_RENDER = "Artist's impression"
 LABEL_CLOSEUP = "For illustration only"
@@ -206,11 +207,13 @@ def endcard_seconds(duration: int) -> int:
 
 
 def max_voiceover_words(duration: int) -> int:
-    """Length presets: 10 s -> 17, 20 s -> 40, 60 s -> 120; otherwise (D - end card) x 2.5."""
-    presets = {10: 17, 20: 40, 60: 120}
-    if duration in presets:
-        return presets[duration]
-    return int((duration - endcard_seconds(duration)) * WORDS_PER_SECOND)
+    """Words that fit before the end card at the real voice pace (never above the spec limits
+    10 s -> 17, 20 s -> 40, 60 s -> 120). Long videos keep ~15% for breathing pauses.
+    10 s -> 13, 20 s -> 31, 30 s -> 51, 60 s -> 95."""
+    window = duration - endcard_seconds(duration) - 0.5
+    words = window * WORDS_PER_SECOND * (0.85 if duration >= 45 else 1.0)
+    spec = SPEC_MAX_WORDS.get(duration, int((duration - endcard_seconds(duration)) * 2.5))
+    return max(8, min(spec, int(words)))
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -248,12 +251,18 @@ def int_words(n: int) -> str:
 
 
 def number_words(text: str) -> str:
-    """'1.42' -> 'one point four two', '1,210' -> 'one thousand two hundred and ten'."""
+    """'1.42' -> 'one point four two', '2.0' -> 'two point o', '1,680' -> 'sixteen hundred and eighty'."""
     t = text.replace(",", "")
     if "." in t:
         whole, frac = t.split(".", 1)
-        return f"{int_words(int(whole or 0))} point {' '.join(_ONES[int(d)] for d in frac if d.isdigit())}"
-    return int_words(int(t))
+        digits = " ".join("o" if d == "0" else _ONES[int(d)] for d in frac if d.isdigit())
+        return f"{int_words(int(whole or 0))} point {digits}"
+    n = int(t)
+    # Speak 1,100–9,999 the short way: "sixteen hundred and eighty" (not "one thousand six hundred…")
+    if 1100 <= n <= 9999 and n % 1000 and (n // 100) % 10:
+        hi, lo = divmod(n, 100)
+        return f"{int_words(hi)} hundred" + (f" and {int_words(lo)}" if lo else "")
+    return int_words(n)
 
 
 def year_words(y: int) -> str:
@@ -339,6 +348,7 @@ class Fact:
     display: str    # end-card / on-screen text
     spoken: str     # voiceover sentence
     spoken_short: str = ""   # shorter form for 10 s versions
+    spoken_tiny: str = ""    # shortest form
 
 
 def available_unit_prices(project: ProjectData) -> List[Tuple[str, int]]:
@@ -368,10 +378,13 @@ def build_facts(project: ProjectData) -> List[Fact]:
     # 1. Price
     if has_units and project.lowest_price_inr:
         price = format_inr(project.lowest_price_inr)
+        pw = price_words(project.lowest_price_inr)
         facts.append(Fact(
             "price",
             f"{units} Homes from {price}*",
-            _sentence(f"{speak(units)} homes from {price_words(project.lowest_price_inr)}"),
+            _sentence(f"{speak(units)} homes from {pw}"),
+            _sentence(f"{speak(units)} from {pw}"),
+            _sentence(f"Homes from {pw}"),
         ))
     # 2. Unit types + size
     if has_units:
@@ -481,6 +494,19 @@ def build_end_card(project: ProjectData, festival: str, facts: List[Fact], logo_
 # Voiceover
 # ═════════════════════════════════════════════════════════════════════
 
+_FESTIVAL_HOOKS = {
+    "Diwali": "light up a new beginning at",
+    "Ugadi": "begin a new year at",
+    "Dussehra": "celebrate a new beginning at",
+    "Ganesh Chaturthi": "welcome a new beginning at",
+    "Onam": "welcome a new home at",
+    "Pongal/Sankranti": "celebrate a fresh start at",
+    "Christmas": "come home for the holidays to",
+    "Eid": "celebrate togetherness at",
+    "New Year": "start the year fresh at",
+}
+
+
 def _opening_variants(project: ProjectData, festival: str, style: str) -> List[str]:
     name = project.name
     loc = project.marketing_name or project.city
@@ -490,7 +516,13 @@ def _opening_variants(project: ProjectData, festival: str, style: str) -> List[s
     elif festival == "None":
         first = [f"Come home to {name}{with_loc}.", f"Come home to {name}."]
     else:
-        first = [f"This {festival}, come home to {name}{with_loc}.", f"This {festival}, come home to {name}."]
+        hook = _FESTIVAL_HOOKS.get(festival, "come home to")
+        first = [
+            f"This {festival}, {hook} {name}{with_loc}.",
+            f"This {festival}, come home to {name}{with_loc}.",
+            f"This {festival}, discover {name}{with_loc}.",
+            f"This {festival}, come home to {name}.",
+        ]
     if style == "location" and loc:
         first = [f"Your new address in {loc}: {name}.", f"Welcome to {name}."] + first
     elif style == "direct":
@@ -507,9 +539,6 @@ def build_voiceover_sentences(
 ) -> List[str]:
     """Fact-only voiceover, within the word limit for the length preset."""
     budget = budget or max_voiceover_words(duration)
-    if duration not in (10, 20, 60):
-        # Leave room for short pauses between lines (the spec limit is a maximum, not a target)
-        budget = min(budget, int((duration - endcard_seconds(duration) - 2) * WORDS_PER_SECOND))
     facts = build_facts(project)
     short = duration <= 12
     long = duration >= 45
@@ -570,7 +599,7 @@ def build_voiceover_sentences(
     body = uniq
 
     openings = _opening_variants(project, festival, style)
-    mains = [body[0][1]] + ([main.spoken_short] if main.spoken_short and main.spoken_short != body[0][1] else [])
+    mains = list(dict.fromkeys(x for x in (body[0][1], main.spoken_short, main.spoken_tiny) if x))
     attempts = [(o, m) for o in openings for m in mains]
     for opening, main_text in attempts:
         sentences = [(-1, opening)] + [(p, main_text if p == 0 else s) for p, s in body]
@@ -1303,7 +1332,8 @@ def plan_video_ad(
 # "all" mode: 60 s first, then 20 s and 10 s from the same clips
 # ═════════════════════════════════════════════════════════════════════
 
-def derive_version(base: AdPlan, project: ProjectData, duration: int, logo_available: bool = True) -> AdPlan:
+def derive_version(base: AdPlan, project: ProjectData, duration: int, logo_available: bool = True,
+                   script: Optional[str] = None) -> AdPlan:
     """Build a shorter version ONLY from scenes already in `base` (same prompts → cached clips)."""
     endcard = endcard_seconds(duration)
     xf = base.crossfade_seconds
@@ -1346,7 +1376,7 @@ def derive_version(base: AdPlan, project: ProjectData, duration: int, logo_avail
         amenity_text_chips=list(base.amenity_text_chips), music_prompt=music_prompt_for(base.festival, duration),
         disclaimers=list(base.disclaimers), show_price_asterisk=base.show_price_asterisk, planner=base.planner,
     )
-    return _finish_plan(plan, project, None, "festive")
+    return _finish_plan(plan, project, script, "festive")
 
 
 def plan_all_versions(
@@ -1358,15 +1388,18 @@ def plan_all_versions(
     logo_available: bool = True,
     crossfade: float = DEFAULT_CROSSFADE,
     base_plan: Optional[AdPlan] = None,
+    scripts: Optional[Dict[int, str]] = None,
 ) -> List[AdPlan]:
-    """Returns [plan_60, plan_20, plan_10]. Veo is paid for only in the 60 s plan."""
+    """Returns [plan_60, plan_20, plan_10]. Veo is paid for only in the 60 s plan.
+    scripts: optional user-approved voiceover per length, e.g. {10: "..."}; other lengths get their own."""
+    scripts = scripts or {}
     plan60 = base_plan or plan_video_ad(
         project, renders, 60, festival, aspect, resolution,
-        logo_available=logo_available, crossfade=crossfade,
+        logo_available=logo_available, crossfade=crossfade, script=scripts.get(60),
     )
     if plan60.blocked:
         return [plan60]
-    return [plan60] + [derive_version(plan60, project, d, logo_available) for d in (20, 10)]
+    return [plan60] + [derive_version(plan60, project, d, logo_available, scripts.get(d)) for d in (20, 10)]
 
 
 # ═════════════════════════════════════════════════════════════════════

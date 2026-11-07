@@ -30,7 +30,7 @@ from music import build_music_track
 from endcard import create_endcard_clip
 from overlays import assemble_final_video
 from script_writer import generate_script_options, ScriptOption, get_script_timing_profile
-from voiceover import generate_indian_voiceover
+from voiceover import generate_indian_voiceover, voice_window_seconds
 
 load_dotenv()
 
@@ -519,7 +519,7 @@ if project_data_obj:
     time_profile = get_script_timing_profile(video_length)
     speaking_window = time_profile["speaking_seconds"]
     word_count = len(edited_script.strip().split()) if edited_script.strip() else 0
-    est_speech_time = round(word_count / 2.25, 1)
+    est_speech_time = round(word_count / 2.0, 1)
 
     s_col1, s_col2 = st.columns([1.5, 3.5])
     with s_col1:
@@ -600,6 +600,7 @@ if project_data_obj:
                     output_path=vo_preview_path,
                     api_key=effective_key,
                     voice_name=selected_voice_name,
+                    max_seconds=speaking_window,
                 )
                 st.session_state["active_preview_audio"] = str(vo_preview_path)
                 st.session_state["active_preview_label"] = f"🎙️ Voiceover Preview ({voice_choice.split('(')[0].strip()})"
@@ -643,6 +644,7 @@ if project_data_obj:
                         output_path=temp_vo,
                         api_key=effective_key,
                         voice_name=selected_voice_name,
+                        max_seconds=speaking_window,
                     )
                     cmd_mix = [
                         "ffmpeg", "-y",
@@ -697,13 +699,15 @@ if project_data_obj:
                 base = plan_with_agent(
                     project_data_obj, approved_renders, 60 if make_all_versions else video_length,
                     selected_festival, aspect_ratio, resolution,
-                    script=None if make_all_versions else user_script,
+                    script=user_script if (not make_all_versions or video_length == 60) else None,
                     logo_available=logo_ok, api_key=user_api_key or os.getenv("GEMINI_API_KEY", ""),
                 )
         if make_all_versions:
+            # Your approved script is written for the selected length; use it only for that version
+            approved_for = {video_length: user_script} if (user_script and video_length in (10, 20, 60)) else {}
             versions = plan_all_versions(
                 project_data_obj, approved_renders, selected_festival, aspect_ratio, resolution,
-                logo_available=logo_ok, base_plan=base,
+                logo_available=logo_ok, base_plan=base, scripts=approved_for,
             )
         else:
             versions = [base or plan_video_ad(
@@ -894,6 +898,7 @@ if generate_video_clicked:
                         output_path=voiceover_dest,
                         api_key=effective_key,
                         voice_name=chosen_voice_name,
+                        max_seconds=voice_window_seconds(pv),
                     )
                 except Exception as e:
                     st.warning(f"Voiceover warning: {e}. Video will proceed with background music track.")

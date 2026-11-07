@@ -25,7 +25,7 @@ from music import build_music_track
 from endcard import create_endcard_clip
 from overlays import assemble_final_video
 from script_writer import generate_script_options
-from voiceover import generate_indian_voiceover
+from voiceover import generate_indian_voiceover, voice_window_seconds
 
 load_dotenv()
 
@@ -219,7 +219,8 @@ def main():
         if not args.no_voiceover and plan.voiceover_script:
             voiceover_dest = cache_dir / f"voiceover_{dur}s.mp3"
             try:
-                generate_indian_voiceover(script_text=plan.voiceover_script, output_path=voiceover_dest)
+                generate_indian_voiceover(script_text=plan.voiceover_script, output_path=voiceover_dest,
+                                          max_seconds=voice_window_seconds(plan))
             except Exception as e:
                 print(f"  ⚠️ Voiceover generation warning: {e}. Falling back to music only.")
                 voiceover_dest = None

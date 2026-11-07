@@ -28,6 +28,8 @@ from planner import (
     PRICE_HINT_WORDS,
     build_facts,
     build_voiceover_sentences,
+    cta_spoken,
+    speak,
     endcard_seconds,
     max_voiceover_words,
 )
@@ -135,7 +137,7 @@ def _build_fact_based_options(
         wc = len(text.split())
         options.append(ScriptOption(
             id=sid, title=title, tone=tone, text=text, word_count=wc,
-            estimated_speech_seconds=round(wc / 2.25, 1), target_duration=duration,
+            estimated_speech_seconds=round(wc / 2.0, 1), target_duration=duration,
             speaking_window=profile["speaking_seconds"],
         ))
     return options
@@ -167,71 +169,86 @@ def _call_gemini_for_scripts(
     endcard_sec = profile["endcard_seconds"]
 
     if festival == "Family":
-        theme_header = f"a {duration}-second heartwarming family-centric real estate video ad focusing on comfortable family living, children amenities, green spaces, safety, and lifelong memories"
-        options_schema = """[
-  {"id": "family_joy", "title": "Where Your Family Thrives", "tone": "Heartwarming, emotional, family-first", "text": "..."},
-  {"id": "community", "title": "Vibrant Community & Safe Living", "tone": "Reassuring, peaceful, multi-generational comfort", "text": "..."},
-  {"id": "future", "title": "A Future-Ready Home for Loved Ones", "tone": "Aspirational, secure, loving home", "text": "..."}
-]"""
+        theme_header = f"a {duration}-second warm, family-first real estate video ad"
+        angles = [
+            ("family_moments", "Moments at Home", "Warm, heartfelt, family-first"),
+            ("room_to_grow", "Room to Grow", "Reassuring, practical, caring"),
+            ("location", "Close to Everything", "Calm, location-led"),
+        ]
     elif festival == "None":
-        theme_header = f"a {duration}-second standard luxury real estate video ad focusing on prime location, architectural excellence, lifestyle amenities, and investment value"
-        options_schema = """[
-  {"id": "location", "title": "Location & Connectivity", "tone": "Modern, calm, location-led", "text": "..."},
-  {"id": "homes", "title": "Homes & Spaces", "tone": "Sophisticated, aspirational", "text": "..."},
-  {"id": "direct", "title": "Straight to the Facts", "tone": "Direct and crisp", "text": "..."}
-]"""
+        theme_header = f"a {duration}-second elegant, modern real estate video ad"
+        angles = [
+            ("location", "Location & Connectivity", "Modern, calm, location-led"),
+            ("homes", "Homes & Spaces", "Refined, aspirational"),
+            ("direct", "Straight to the Facts", "Direct and crisp"),
+        ]
     else:
-        theme_header = f"a {duration}-second festive real estate video ad celebrating {festival}"
-        options_schema = """[
-  {"id": "festive", "title": "Festive & Auspicious Celebration", "tone": "Warm, celebratory, family-centric", "text": "..."},
-  {"id": "direct", "title": "Festive Facts First", "tone": "Direct, crisp, festive", "text": "..."},
-  {"id": "luxury", "title": "Luxury Living & Festive Elegance", "tone": "Sophisticated, aspirational, auspicious", "text": "..."}
-]"""
+        theme_header = f"a {duration}-second festive real estate video ad for {festival}"
+        angles = [
+            ("festive", f"{festival} Welcome", "Warm, celebratory, emotional"),
+            ("home_story", "A Home to Celebrate In", "Heartfelt, aspirational"),
+            ("direct", "Festive Facts First", "Direct, crisp, festive"),
+        ]
+    options_schema = json.dumps(
+        [{"id": i, "title": t, "tone": tone, "text": "..."} for i, t, tone in angles], indent=2
+    )
 
     has_price = bool(project.lowest_price_inr and project.lowest_price_inr > 0)
-    amenities_str = ", ".join(project.amenities) if project.amenities else "NOT GIVEN – do not mention any amenity"
-    travel_str = ", ".join(project.travel_times) if project.travel_times else "NOT GIVEN – no 'minutes from' or 'near' claims"
     facts = build_facts(project)
-    facts_str = "\n".join(f"  {i+1}. {f.display}" for i, f in enumerate(facts))
-
-    if has_price:
-        price_fact = f"- Starting Price: {project.formatted_lowest_price}"
-        price_rule = f"and starting price ({project.formatted_lowest_price})"
+    facts_str = "\n".join(f"  {i+1}. {f.display}  →  say: \"{f.spoken}\"" for i, f in enumerate(facts))
+    loc = project.marketing_name or project.city
+    if project.travel_times:
+        travel_str = "; ".join(f"{t}  →  say: \"{speak(t)}\"" for t in project.travel_times[:3])
     else:
-        price_fact = "- Starting Price: NOT GIVEN. Do not mention or hint at price (no 'affordable', 'budget', 'value for money'). You may say 'Enquire now for price details.'"
-        price_rule = "and highlight prime connectivity and luxury amenities (DO NOT mention price)"
+        travel_str = "NOT GIVEN – no 'minutes from' or 'near' claims"
+    amenities_str = ", ".join(project.amenities) if project.amenities else "NOT GIVEN – do not mention any amenity"
+    if has_price:
+        price_rule = f"the main selling line (price: \"{facts[0].spoken}\")"
+    else:
+        price_rule = ("the main selling line. There is NO price: never mention or hint at price "
+                      "(no 'affordable', 'budget', 'value for money'); you may say 'Enquire now for price details.'")
+    short = duration <= 12
+    cta = ("Do NOT add a call-to-action sentence (the end card shows it)." if short
+           else f"End with this call to action: \"{cta_spoken(project)}\"")
+    if short:
+        example = ("STYLE EXAMPLE for 10 s (fictional project – copy the rhythm, never the facts):\n"
+                   "  \"This Diwali, come home to Sunrise Greens, Baner. Homes from sixty-five lakh.\"")
+    else:
+        example = ("STYLE EXAMPLE for 20 s (fictional project – copy the rhythm, never the facts):\n"
+                   "  \"This Diwali, light up a new beginning at Sunrise Greens, Baner. Two B-H-K homes from "
+                   "sixty-five lakh. Just ten minutes to Hinjewadi. Book your site visit this weekend.\"")
 
-    prompt = f"""You are an elite Indian real estate commercial voiceover copywriter and audio director.
-Write 3 distinct promotional voiceover script options for {theme_header}.
+    prompt = f"""You are a senior Indian real-estate copywriter writing voiceover for {theme_header}.
+Write 3 voiceover scripts, one for each angle in the JSON below. Each must sound clearly different.
 
-STRICT TIMING & WORD COUNT CONSTRAINTS:
-- Video Duration: {duration} seconds.
-- Outro End Card: {endcard_sec} seconds (visual outro with logo, RERA number, and disclaimers).
-- Target Spoken Duration: EXACTLY {speaking_sec} seconds.
-- Word Count Range: MUST be between {min_words} and {max_words} words (Target: {target_words} words).
-- CRITICAL: A professional voiceover actor speaks at 2.25 words per second. If you write more than {max_words} words, the voiceover will exceed the {duration}s video!
+TIMING (hard limit – the voice is measured, not guessed):
+- The narrator speaks about 2 words per second. The voice must finish in {speaking_sec} seconds,
+  before the {endcard_sec:.0f}-second end card.
+- Each script: {min_words}–{max_words} words. Never more than {max_words}. Count before answering.
 
-PROJECT FACTS (Use ONLY these confirmed facts - DO NOT invent anything):
-- Project Name: {project.name}
-- Promoter: {project.promoter}
-- Location: {project.marketing_name}, {project.city}
-- Connectivity & Travel Times: {travel_str}
-- Luxury Amenities: {amenities_str}
-- Unit Types: {project.formatted_units_summary if project.available_units and not project.all_units_sold_out else "NOT GIVEN / sold out – do not mention unit types"}
-{price_fact}
-- Selling lines in priority order (the first is the main line):
+FACTS – the ONLY facts you may use (use the spoken form shown after the arrow):
+- Project: {project.name}{f" by {project.promoter}" if project.promoter else ""}
+- Location: {loc}{f", {project.city}" if project.city and project.city not in loc else ""}
+- Selling lines in priority order (1 is the main line):
 {facts_str}
+- Travel times: {travel_str}
+- Amenities: {amenities_str}
 
-CRITICAL RULES:
-1. Every script MUST state the project name ({project.name}) and location ({project.marketing_name or project.city}), and use the main selling line {price_rule}.
-2. Facts come ONLY from the list above. Never invent prices, offers, discounts, amenities, distances, possession dates.
-3. Never use these words: "best", "luxury-most", "guaranteed", "lowest price", "high returns", "investment", "appreciation".
-4. Write numbers and abbreviations as spoken: "ninety-six lakh", "two and three B-H-K". Never read out the RERA number.
-5. Never repeat the same fact twice. {"Do not write a call-to-action sentence (it is on the end card)." if duration <= 12 else "End with a call to action (e.g. 'Book your site visit this weekend.')."}
-6. Written in natural, broadcast-quality Indian-English suitable for voiceover.
-7. Output MUST be a valid JSON array of 3 objects with keys: "id", "title", "tone", "text".
+HOW TO WRITE IT
+1. Open with a hook in the first few words{f" that mentions {festival} naturally" if festival not in ("None", "Family") else ""}, then the project name and location once.
+2. Use {price_rule}. {"Add one more fact from the list if it fits." if not short else "Nothing else fits in 10 seconds."}
+3. Short, spoken sentences (under 12 words each), one idea per sentence. Talk to the viewer ("you", "your").
+4. {cta}
+5. Numbers as spoken in India: "ninety-six lakh", "one point four two crore", "two and three B-H-K",
+   "sixteen hundred and eighty square feet". Decimals digit by digit with zero as "o": 2.0 → "two point o".
+   Never read the RERA number, phone numbers or website addresses.
+6. Never invent prices, offers, discounts, amenities, distances or dates. Never repeat a fact.
+7. Banned words: best, luxury-most, guaranteed, lowest price, high returns, investment, appreciation.
+   Avoid empty puffery: world-class, unparalleled, elevate, luxurious, premium.
 
-Return ONLY JSON. No markdown fences.
+{example}
+
+Return ONLY a JSON array (no markdown) in exactly this shape:
 {options_schema}"""
 
     data, used = generate_json(prompt, api_key=api_key, temperature=0.65, max_output_tokens=16384, timeout=120)
@@ -248,7 +265,7 @@ Return ONLY JSON. No markdown fences.
             tone=item.get("tone", "Professional"),
             text=txt,
             word_count=wcount,
-            estimated_speech_seconds=round(wcount / 2.25, 1),
+            estimated_speech_seconds=round(wcount / 2.0, 1),
             target_duration=duration,
             speaking_window=speaking_sec,
         ))
