@@ -30,6 +30,10 @@ from planner import (
     build_voiceover_sentences,
     cta_spoken,
     speak,
+    REFERENCE_TONES,
+    amenity_highlight,
+    spoken_budget,
+    spoken_word_count,
     endcard_seconds,
     max_voiceover_words,
 )
@@ -65,9 +69,9 @@ def get_script_timing_profile(duration: int) -> Dict[str, Any]:
     speaking_sec = max(6.0, float(duration) - endcard_sec - 0.5)
 
     # Word limits from the scene-planner spec (10 s -> 17, 20 s -> 40, 60 s -> 120)
-    max_words = max_voiceover_words(duration)
-    target_words = max(12, int(max_words * 0.9))
-    min_words = max(10, int(max_words * 0.7))
+    max_words = spoken_budget(duration)          # spoken words ("2.0" = "two point o" = 3)
+    target_words = max(10, int(max_words * 0.85))
+    min_words = max(8, int(max_words * 0.6))
 
     return {
         "duration": duration,
@@ -126,13 +130,8 @@ def _build_fact_based_options(
 ) -> List[ScriptOption]:
     """Three scripts that use only JSON facts and the selling-line fallback chain."""
     duration = profile["duration"]
-    styles = [
-        ("festive", "Festive Welcome", "Warm, celebratory"),
-        ("location", "Your New Address", "Location-led, calm"),
-        ("direct", "Straight to the Facts", "Direct, crisp"),
-    ]
     options = []
-    for sid, title, tone in styles:
+    for sid, (title, tone) in REFERENCE_TONES.items():
         text = " ".join(build_voiceover_sentences(project, festival, duration, style=sid))
         wc = len(text.split())
         options.append(ScriptOption(
@@ -145,7 +144,7 @@ def _build_fact_based_options(
 
 def _script_is_compliant(text: str, project: ProjectData, max_words: int) -> bool:
     low = text.lower()
-    if len(text.split()) > max_words:
+    if spoken_word_count(text) > max_words:
         return False
     if any(re.search(rf"\b{re.escape(w)}\b", low) for w in BANNED_CLAIMS):
         return False
@@ -170,25 +169,11 @@ def _call_gemini_for_scripts(
 
     if festival == "Family":
         theme_header = f"a {duration}-second warm, family-first real estate video ad"
-        angles = [
-            ("family_moments", "Moments at Home", "Warm, heartfelt, family-first"),
-            ("room_to_grow", "Room to Grow", "Reassuring, practical, caring"),
-            ("location", "Close to Everything", "Calm, location-led"),
-        ]
     elif festival == "None":
         theme_header = f"a {duration}-second elegant, modern real estate video ad"
-        angles = [
-            ("location", "Location & Connectivity", "Modern, calm, location-led"),
-            ("homes", "Homes & Spaces", "Refined, aspirational"),
-            ("direct", "Straight to the Facts", "Direct and crisp"),
-        ]
     else:
         theme_header = f"a {duration}-second festive real estate video ad for {festival}"
-        angles = [
-            ("festive", f"{festival} Welcome", "Warm, celebratory, emotional"),
-            ("home_story", "A Home to Celebrate In", "Heartfelt, aspirational"),
-            ("direct", "Festive Facts First", "Direct, crisp, festive"),
-        ]
+    angles = [(k, t, tone) for k, (t, tone) in REFERENCE_TONES.items()]
     options_schema = json.dumps(
         [{"id": i, "title": t, "tone": tone, "text": "..."} for i, t, tone in angles], indent=2
     )
@@ -210,32 +195,40 @@ def _call_gemini_for_scripts(
     short = duration <= 12
     cta = ("Do NOT add a call-to-action sentence (the end card shows it)." if short
            else f"End with this call to action: \"{cta_spoken(project)}\"")
-    if short:
-        example = ("STYLE EXAMPLE for 10 s (fictional project – copy the rhythm, never the facts):\n"
-                   "  \"This Diwali, come home to Sunrise Greens, Baner. Homes from sixty-five lakh.\"")
-    else:
-        example = ("STYLE EXAMPLE for 20 s (fictional project – copy the rhythm, never the facts):\n"
-                   "  \"This Diwali, light up a new beginning at Sunrise Greens, Baner. Two B-H-K homes from "
-                   "sixty-five lakh. Just ten minutes to Hinjewadi. Book your site visit this weekend.\"")
-
+    example = (
+        "CLIENT-APPROVED STYLE REFERENCES – match this rhythm, length and tone exactly (these happen to be\n"
+        "for another Diwali project; use only THIS project's facts and festival):\n"
+        "  Short & Punchy: \"Celebrate Diwali at Kundan Eternia 2.0, Pune. Explore luxury living with a "
+        "world-class clubhouse and gym today!\"\n"
+        "  Warm & Festive: \"Light up your Diwali at Kundan Eternia 2.0, Pune—featuring exclusive club "
+        "amenities and a modern gym. Visit now.\"\n"
+        "  Crisp & Direct: \"Your dream Diwali awaits at Kundan Eternia 2.0, Pune. Discover the clubhouse "
+        "and gym today!\"\n"
+        "Pattern: festive hook + project name + CITY, then the headline amenities (or the price if given), "
+        "then a 1–3 word call to action (\"today!\", \"Visit now.\")."
+    )
+    highlight = amenity_highlight(project)
     prompt = f"""You are a senior Indian real-estate copywriter writing voiceover for {theme_header}.
 Write 3 voiceover scripts, one for each angle in the JSON below. Each must sound clearly different.
 
 TIMING (hard limit – the voice is measured, not guessed):
 - The narrator speaks about 2 words per second. The voice must finish in {speaking_sec} seconds,
   before the {endcard_sec:.0f}-second end card.
-- Each script: {min_words}–{max_words} words. Never more than {max_words}. Count before answering.
+- Each script: {min_words}–{max_words} SPOKEN words ("2.0" is said "two point o" = 3 words). Never more than
+  {max_words}. Count before answering.
 
 FACTS – the ONLY facts you may use (use the spoken form shown after the arrow):
 - Project: {project.name}{f" by {project.promoter}" if project.promoter else ""}
 - Location: {loc}{f", {project.city}" if project.city and project.city not in loc else ""}
 - Selling lines in priority order (1 is the main line):
 {facts_str}
+- City: {project.city or loc}
+- Headline amenities to feature: {highlight or "none – use the main selling line instead"}
 - Travel times: {travel_str}
 - Amenities: {amenities_str}
 
 HOW TO WRITE IT
-1. Open with a hook in the first few words{f" that mentions {festival} naturally" if festival not in ("None", "Family") else ""}, then the project name and location once.
+1. Follow the client style references above: hook{f" with {festival}" if festival not in ("None", "Family") else ""}, project name and city once.
 2. Use {price_rule}. {"Add one more fact from the list if it fits." if not short else "Nothing else fits in 10 seconds."}
 3. Short, spoken sentences (under 12 words each), one idea per sentence. Talk to the viewer ("you", "your").
 4. {cta}
@@ -244,7 +237,7 @@ HOW TO WRITE IT
    Never read the RERA number, phone numbers or website addresses.
 6. Never invent prices, offers, discounts, amenities, distances or dates. Never repeat a fact.
 7. Banned words: best, luxury-most, guaranteed, lowest price, high returns, investment, appreciation.
-   Avoid empty puffery: world-class, unparalleled, elevate, luxurious, premium.
+   Light style words from the references are fine ("luxury living", "modern", "dream").
 
 {example}
 

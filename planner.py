@@ -534,6 +534,125 @@ def _opening_variants(project: ProjectData, festival: str, style: str) -> List[s
     return first + [f"{name}."]
 
 
+# ── Client reference style (short, punchy festive lines) ─────────────────
+# "Celebrate Diwali at Kundan Eternia 2.0, Pune. Explore luxury living with a clubhouse and gym today!"
+# "Light up your Diwali at Kundan Eternia 2.0, Pune—featuring club amenities and a modern gym. Visit now."
+# "Your dream Diwali awaits at Kundan Eternia 2.0, Pune. Discover the clubhouse and gym today!"
+REFERENCE_TONES = {
+    "punchy": ("Short & Punchy", "Energetic, celebratory"),
+    "warm": ("Warm & Festive", "Warm, inviting"),
+    "crisp": ("Crisp & Direct", "Clear, confident"),
+}
+_AMENITY_RANK = [  # (key, words that identify it, how to say it)
+    ("clubhouse", ("club house", "clubhouse", "club-house"), "clubhouse"),
+    ("gym", ("gym", "gymnasium", "fitness"), "gym"),
+    ("pool", ("pool",), "swimming pool"),
+    ("amphitheatre", ("amphitheat",), "amphitheatre"),
+    ("lawn", ("lawn",), "party lawn"),
+    ("garden", ("garden",), "gardens"),
+    ("play", ("play area", "play zone", "playground", "kids play", "children"), "kids' play area"),
+    ("jogging", ("jogging", "walking track"), "jogging track"),
+    ("court", ("court",), "sports court"),
+    ("yoga", ("yoga",), "yoga deck"),
+]
+
+
+def amenity_highlight(project: ProjectData, n: int = 2) -> str:
+    """'the clubhouse and gym' – the most appealing lifestyle amenities, said simply."""
+    found: List[str] = []
+    for key, words, said in _AMENITY_RANK:
+        if any(any(w in a.lower() for w in words) for a in project.amenities):
+            found.append(said)
+    if not found:
+        found = [a.lower().replace(" & ", " and ") for a in project.amenities]
+    found = found[:n]
+    if not found:
+        return ""
+    return "the " + (found[0] if len(found) == 1 else ", ".join(found[:-1]) + " and " + found[-1])
+
+
+def spoken_word_count(text: str) -> int:
+    """Words as the narrator says them ('2.0' -> 'two point o' = 3 words)."""
+    return word_count(speak(text))
+
+
+def spoken_budget(duration: int) -> int:
+    """Spoken words that fit before the end card (measured: ~2 words/s incl. pauses and long words)."""
+    return max(10, int((duration - endcard_seconds(duration) - 0.5) * 2.0))
+
+
+def build_reference_script(project: ProjectData, festival: str, duration: int, tone: str = "punchy") -> List[str]:
+    """Scripts in the client's reference style: festive hook + project + city, one amenity
+    highlight (or the main fact), short call to action. Facts only from the JSON."""
+    name = project.name
+    city = project.city or project.marketing_name
+    at = f"{name}, {city}" if city else name
+    hl = amenity_highlight(project)
+    hl1 = amenity_highlight(project, 1)
+    facts = build_facts(project)
+    main = facts[0]
+    price_line = main.spoken_short if main.kind == "price" else ""
+    short = duration <= 12
+    budget = spoken_budget(duration)
+    fest = festival if festival not in NEUTRAL_THEMES else ""
+
+    def hooks() -> Dict[str, List[str]]:
+        if festival == "Family":
+            return {"punchy": [f"A home for your family at {at}."],
+                    "warm": [f"Make memories with your family at {at}"],
+                    "crisp": [f"Your family's new home awaits at {at}."]}
+        if not fest:
+            return {"punchy": [f"Discover {at}."], "warm": [f"Come home to {at}"],
+                    "crisp": [f"Your new address awaits at {at}."]}
+        return {"punchy": [f"Celebrate {fest} at {at}."], "warm": [f"Light up your {fest} at {at}"],
+                "crisp": [f"Your dream {fest} awaits at {at}.", f"Your {fest} awaits at {at}."]}
+
+    cta = "Visit now." if tone == "warm" else "today!"
+    full: List[List[str]] = []
+    reduced: List[List[str]] = []
+    minimal: List[List[str]] = []
+    hook_list = list(hooks()[tone])
+    if city:   # shorter fallbacks: same hook without the city
+        hook_list += [h.replace(f", {city}", "") for h in hook_list]
+    for hook in hook_list:
+        for h in [x for x in (hl, hl1) if x] or [""]:
+            if tone == "warm":
+                first = f"{hook}, with {h}." if h else f"{hook}."
+                body = [first]
+            else:
+                first = hook
+                if h:
+                    verb = "Explore luxury living with" if tone == "punchy" and not short else "Discover"
+                    body = [first, f"{verb} {h} {cta}"]
+                else:
+                    body = [first]
+            extra = []
+            if short and not h:
+                # No amenities: the 10 s line carries the main fact instead (e.g. "Homes from ninety-six lakh.")
+                extra.append(main.spoken_tiny or main.spoken_short or main.spoken)
+            if not short:
+                if price_line:
+                    extra.append(price_line)
+                elif main.kind not in ("amenities", "enquire"):
+                    extra.append(main.spoken_short or main.spoken)
+            closing = [] if short and tone != "warm" else []
+            if tone == "warm":
+                closing = ["Visit now."]
+            elif not h:
+                closing = ["Visit today!"]
+            if not short and project.site_visits.formatted_text:
+                closing = [cta_spoken(project)] if tone != "punchy" else closing
+            full.append(body[:1] + extra + body[1:] + closing)
+            reduced.append(body + closing)          # without the extra fact
+            minimal.append([hook if hook.endswith(".") else hook + ".", "Visit now." if tone == "warm" else "Visit today!"])
+    # Prefer keeping the facts (dropping the city first), then drop the extra fact, then hook + CTA only
+    candidates = full + reduced + minimal
+    for c in candidates:
+        if sum(spoken_word_count(x) for x in c) <= budget:
+            return c
+    return min(candidates, key=lambda c: sum(spoken_word_count(x) for x in c))
+
+
 def build_voiceover_sentences(
     project: ProjectData,
     festival: str,
@@ -541,7 +660,12 @@ def build_voiceover_sentences(
     style: str = "festive",
     budget: Optional[int] = None,
 ) -> List[str]:
-    """Fact-only voiceover, within the word limit for the length preset."""
+    """Fact-only voiceover, within the word limit for the length preset.
+    Up to 30 s (and for the reference tones) the client reference style is used."""
+    if style in REFERENCE_TONES and duration <= 30 and budget is None:
+        return build_reference_script(project, festival, duration, style)
+    if style in REFERENCE_TONES:
+        style = {"punchy": "festive", "warm": "festive", "crisp": "direct"}[style]
     budget = budget or max_voiceover_words(duration)
     facts = build_facts(project)
     short = duration <= 12
@@ -1237,7 +1361,7 @@ def plan_video_ad(
     script: Optional[str] = None,
     logo_available: bool = True,
     crossfade: float = DEFAULT_CROSSFADE,
-    voice_style: str = "festive",
+    voice_style: str = "punchy",
 ) -> AdPlan:
     """Rule-based scene plan following prompts/scene_planner_system.txt."""
     duration = max(10, min(60, int(requested_duration)))
@@ -1367,7 +1491,7 @@ def derive_version(base: AdPlan, project: ProjectData, duration: int, logo_avail
         amenity_text_chips=list(base.amenity_text_chips), music_prompt=music_prompt_for(base.festival, duration),
         disclaimers=list(base.disclaimers), show_price_asterisk=base.show_price_asterisk, planner=base.planner,
     )
-    return _finish_plan(plan, project, script, "festive")
+    return _finish_plan(plan, project, script, "punchy")
 
 
 def plan_all_versions(
