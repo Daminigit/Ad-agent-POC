@@ -188,7 +188,9 @@ slow push-in toward the right side. Use a different one each time a render is re
 NEVER pan, orbit or tilt: those slide past the edge of the render and make Veo invent
 trees, paths or buildings that are not in the image. Add to every render prompt: "The
 camera stays inside the picture: it only moves slowly closer and never pans, orbits or
-tilts past the edges of the image, so nothing outside the image is revealed or invented."
+tilts past the edges of the image, so nothing outside the image is revealed or invented.
+Do not add any trees, plants, flowers, blossoms or landscaping that are not in the image;
+keep every existing tree and plant exactly as it is."
 
 People (in render scenes only – the person description is used for the whole video):
 - Festival and Family themes: "a graceful Indian woman in her early 30s with jasmine flowers

@@ -50,6 +50,10 @@ def with_ambient_audio(prompt: str) -> str:
     return prompt[:i] + AMBIENT_AUDIO_LINE + prompt[i:] if i >= 0 else prompt + AMBIENT_AUDIO_LINE
 
 
+# "allow_adult" blocks any clip with children (Family scenes); "allow_all" permits them.
+PERSON_GENERATION = os.getenv("VEO_PERSON_GENERATION", "allow_all")
+
+
 def _prepare_image(image_bytes: bytes, max_side: int = 1920) -> bytes:
     """Re-encode the render as a JPEG no larger than 1920 px (keeps requests small)."""
     from io import BytesIO
@@ -251,9 +255,9 @@ class VeoClient:
         if use_vertex:
             # Audio is OFF for every clip (the program adds music + voiceover); also cheaper.
             params.update({"generateAudio": bool(with_audio), "resolution": resolution,
-                           "personGeneration": "allow_adult"})
+                           "personGeneration": PERSON_GENERATION})
         else:
-            params["personGeneration"] = "allow_adult"
+            params["personGeneration"] = PERSON_GENERATION
         payload = {"instances": [instance], "parameters": params}
 
         errors = []

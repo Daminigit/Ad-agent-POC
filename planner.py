@@ -56,7 +56,9 @@ LABEL_CLOSEUP = "For illustration only"
 # invent what lies beyond it (extra trees, paths, buildings). Every move here just moves closer.
 CAMERA_MOVES = ["drone push-in", "gentle dolly-in", "slow push-in toward the left side", "slow push-in toward the right side"]
 IN_FRAME = (" The camera stays inside the picture: it only moves slowly closer and never pans, orbits or tilts"
-            " past the edges of the image, so nothing outside the image is revealed or invented.")
+            " past the edges of the image, so nothing outside the image is revealed or invented."
+            " Do not add any trees, plants, flowers, blossoms or landscaping that are not in the image; keep every"
+            " existing tree and plant exactly as it is.")
 
 BANNED_CLAIMS = ["best", "luxury-most", "guaranteed", "lowest price", "high returns"]
 PRICE_HINT_WORDS = ["affordable", "budget", "low price", "best price", "value for money"]
