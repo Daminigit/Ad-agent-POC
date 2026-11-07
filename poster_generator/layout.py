@@ -428,9 +428,9 @@ def render_poster(
     # Composite overlays onto canvas
     canvas = Image.alpha_composite(canvas, overlay)
 
-    # 7. Unverified Project Watermark (Draft Protection)
-    if not project.is_verified:
-        canvas = _apply_draft_watermark(canvas, target_w, target_h)
+    # 7. Unverified Project Watermark (Draft Protection disabled per user preference)
+    # if not project.is_verified:
+    #     canvas = _apply_draft_watermark(canvas, target_w, target_h)
 
     # Final RGB conversion
     final_img = canvas.convert("RGB")

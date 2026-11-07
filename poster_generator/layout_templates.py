@@ -241,8 +241,7 @@ def _finalise(
     output_path,
 ) -> Image.Image:
     result = Image.alpha_composite(canvas, overlay)
-    if not project.is_verified:
-        result = _apply_draft_watermark(result, result.width, result.height)
+    # Draft watermark disabled per user preference
     final = result.convert("RGB")
     if output_path:
         p = Path(output_path)

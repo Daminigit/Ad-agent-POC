@@ -40,7 +40,7 @@ class VideoJobRequest:
     project_id: str
     aspect: str = "9:16"                     # e.g. "9:16", "16:9", "1:1"
     duration: int = 10                       # in seconds (e.g. 5, 8, 10, 15)
-    quality: str = "1080p"                   # "720p", "1080p"
+    quality: str = "720p"                    # "720p", "1080p"
     prompt: Optional[str] = None             # Motion / cinematic prompt
     image_bytes: Optional[bytes] = None      # Conditioning image / render
     script_text: Optional[str] = None        # Script for voice / avatar
@@ -144,7 +144,7 @@ class WanFlashEngine(BaseVideoEngine):
             "gentle slow zoom, drifting clouds, cinematic real estate, smooth motion, 1080p"
         )
         motion_strength = float(request.options.get("motion_strength", self.config.get("motion_strength", 0.4)))
-        resolution = request.quality if request.quality in ("720p", "1080p") else "1080p"
+        resolution = request.quality if request.quality in ("720p", "1080p") else "720p"
 
         # Image conditioning
         if not request.image_bytes:
@@ -230,7 +230,22 @@ class VeoFastEngine(BaseVideoEngine):
             or os.getenv("GOOGLE_GENAI_API_KEY")
             or ""
         ).strip()
-        return bool(key and not key.startswith("your_"))
+        has_key = bool(key and not key.startswith("your_"))
+        has_adc = bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+        return has_key or has_adc
+
+    def _get_request_headers(self) -> Dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        try:
+            import google.auth
+            from google.auth.transport.requests import Request
+            creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+            creds.refresh(Request())
+            if creds.token:
+                headers["Authorization"] = f"Bearer {creds.token}"
+        except Exception:
+            pass
+        return headers
 
     def _get_api_key(self) -> str:
         return (
@@ -310,10 +325,21 @@ class VeoFastEngine(BaseVideoEngine):
                     },
                 }
 
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:predictLongRunning?key={api_key}"
+                gcp_project = os.getenv("GCP_PROJECT_ID", "").strip()
+                gcp_location = os.getenv("GCP_LOCATION", "us-central1").strip()
+                headers = self._get_request_headers()
+
+                if gcp_project:
+                    if "Authorization" in headers:
+                        url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/projects/{gcp_project}/locations/{gcp_location}/publishers/google/models/{target_model}:predictLongRunning"
+                    else:
+                        url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/projects/{gcp_project}/locations/{gcp_location}/publishers/google/models/{target_model}:predictLongRunning?key={api_key}"
+                else:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:predictLongRunning?key={api_key}"
+
                 resp = requests.post(
                     url,
-                    headers={"Content-Type": "application/json"},
+                    headers=headers,
                     json=payload,
                     timeout=30,
                 )
@@ -329,13 +355,19 @@ class VeoFastEngine(BaseVideoEngine):
                     continue
 
                 # Poll operation until done
-                poll_url = f"https://generativelanguage.googleapis.com/v1beta/{operation_name}?key={api_key}"
+                if gcp_project and not operation_name.startswith("http"):
+                    if "Authorization" in headers:
+                        poll_url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/{operation_name}"
+                    else:
+                        poll_url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/{operation_name}?key={api_key}"
+                else:
+                    poll_url = f"https://generativelanguage.googleapis.com/v1beta/{operation_name}?key={api_key}"
                 max_polls = 60
                 video_found = False
 
                 for _ in range(max_polls):
                     time.sleep(5)
-                    poll_resp = requests.get(poll_url, timeout=30)
+                    poll_resp = requests.get(poll_url, headers=headers, timeout=30)
                     if poll_resp.status_code != 200:
                         continue
                     poll_json = poll_resp.json()

@@ -38,6 +38,8 @@ poster_generator/cache/
 
 # Secrets & OAuth Credentials
 *client_secret*.json
+*service-account*.json
+gcp-service-account.json
 *.pem
 *.key
 

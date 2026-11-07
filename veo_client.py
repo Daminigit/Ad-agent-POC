@@ -49,7 +49,22 @@ class VeoClient:
         ).strip()
 
     def is_configured(self) -> bool:
-        return bool(self.api_key and not self.api_key.startswith("your_"))
+        has_key = bool(self.api_key and not self.api_key.startswith("your_"))
+        has_adc = bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+        return has_key or has_adc
+
+    def _get_request_headers(self) -> Dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        try:
+            import google.auth
+            from google.auth.transport.requests import Request
+            creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+            creds.refresh(Request())
+            if creds.token:
+                headers["Authorization"] = f"Bearer {creds.token}"
+        except Exception:
+            pass
+        return headers
 
     def _compute_cache_key(
         self,
@@ -73,7 +88,7 @@ class VeoClient:
         prompt: str,
         duration: int,
         aspect: str = "16:9",
-        resolution: str = "1080p",
+        resolution: str = "720p",
         image_path: Optional[str] = None,
         output_dest: Optional[Path] = None,
     ) -> Path:
@@ -81,8 +96,8 @@ class VeoClient:
         Generate a video clip using Veo 3.1 Fast (or retrieve from cache).
         Retries up to 2 times on failure.
         """
-        # Duration must be 4, 6, or 8
-        dur = 8 if duration not in (4, 6, 8) else duration
+        # Duration must be 4, 6, or 8 (Veo API constraints)
+        dur = 4 if duration <= 4 else (6 if duration <= 6 else 8)
 
         # Aspect format for Veo
         aspect_ratio = "16:9" if aspect == "16:9" else "9:16"
@@ -186,11 +201,21 @@ class VeoClient:
 
         # Try models in priority order
         last_resp_text = ""
+        gcp_project = os.getenv("GCP_PROJECT_ID", "").strip()
+        gcp_location = os.getenv("GCP_LOCATION", "us-central1").strip()
+        headers = self._get_request_headers()
+
         for model in DEFAULT_VEO_MODELS:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:predictLongRunning?key={self.api_key}"
+            if gcp_project:
+                if "Authorization" in headers:
+                    url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/projects/{gcp_project}/locations/{gcp_location}/publishers/google/models/{model}:predictLongRunning"
+                else:
+                    url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/projects/{gcp_project}/locations/{gcp_location}/publishers/google/models/{model}:predictLongRunning?key={self.api_key}"
+            else:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:predictLongRunning?key={self.api_key}"
             resp = requests.post(
                 url,
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 json=payload,
                 timeout=30,
             )
@@ -205,10 +230,16 @@ class VeoClient:
                 continue
 
             # Poll long-running operation
-            poll_url = f"https://generativelanguage.googleapis.com/v1beta/{operation_name}?key={self.api_key}"
+            if gcp_project and not operation_name.startswith("http"):
+                if "Authorization" in headers:
+                    poll_url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/{operation_name}"
+                else:
+                    poll_url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/{operation_name}?key={self.api_key}"
+            else:
+                poll_url = f"https://generativelanguage.googleapis.com/v1beta/{operation_name}?key={self.api_key}"
             for _ in range(60):
                 time.sleep(5)
-                poll_resp = requests.get(poll_url, timeout=30)
+                poll_resp = requests.get(poll_url, headers=headers, timeout=30)
                 if poll_resp.status_code != 200:
                     continue
                 poll_json = poll_resp.json()
