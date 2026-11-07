@@ -108,16 +108,17 @@ has enough content. Never use the same fact twice in one voiceover.
      building. Add warning "No exterior render – video has no building shot."
 When time is short, drop in this order: festive close-ups, then a second camera move on a
 reused render, then extra amenity/interior renders. Never drop the opening scene or the
-end card.
+end card. EVERY video (10 s included) keeps at least one festive close-up.
 When time is long and renders run out, reuse a render with a DIFFERENT camera move rather
 than inventing new property visuals. Do not use the same render more than twice.
 
 # LENGTH PRESETS (the team makes 10 s, 20 s and 60 s versions)
 duration_seconds is 10, 20 or 60, or "all" (make all three).
 
-10 s – one strong moment:
-- 1 Veo scene (8 s): the opening scene for the case (exterior; for case E a festive
-  close-up), then the 3 s end card.
+10 s – one strong moment plus people:
+- 2 Veo scenes (4 s + 4 s): the opening scene for the case (exterior; for case E a festive
+  close-up), then a festive close-up (case E: an interior/amenity render), then the 3 s
+  end card.
 - Voiceover max 17 words: project name, location, one price line. No CTA sentence;
   the CTA is on the end card.
 
@@ -152,17 +153,30 @@ Render scenes (veo_mode "image_to_video", label "Artist's impression"):
   or reshape any building. No people."
 - Interior: "Slow, smooth cinematic {camera_move} through this room exactly as shown in the
   image, decorated for {festival} with lit brass diyas, marigold garlands and a small
-  flower rangoli. Keep the room layout, furniture, windows and finishes exactly as in the
-  image. Warm evening light."
+  flower rangoli. {interior people} The people are added naturally into the scene; do not
+  change, move or cover the architecture, furniture or layout. Keep the room layout,
+  furniture, windows and finishes exactly as in the image. Warm evening light."
 - Amenity: "Slow cinematic {camera_move} across this amenity exactly as shown in the
   image, in the evening during {festival}, with warm string lights and diyas around it.
-  Keep the architecture, water, landscaping and furniture exactly as in the image."
+  {amenity people} The people are added naturally into the scene; do not change, move or
+  cover the architecture, furniture or layout. Keep the architecture, water, landscaping
+  and furniture exactly as in the image."
+- People in interior and amenity render scenes, by theme (exteriors stay "No people"):
+  - Festival: {person} doing the festival ritual (e.g. lighting a diya), with an Indian
+    family in festive traditional clothes nearby; at amenities, a few Indian families in
+    festive traditional clothes strolling, and {person} greeting them.
+  - Family: {person} with her family in festive traditional clothes (parents,
+    grandparents, two children).
+  - None (standard ad): Indian professionals in smart business suits.
 camera_move options: drone push-in, slow orbit, slow pan left to right, slow tilt up,
 gentle dolly-in. Use a different one each time a render is reused.
 
 Festive close-up scenes (veo_mode "text_to_video", label "For illustration only"):
 - Use ONE person description for the whole video, e.g. "a graceful Indian woman in her
   early 30s with jasmine flowers in her hair, wearing an elegant maroon and gold silk saree".
+  Festival and Family themes: always an Indian woman in a saree. None (standard ad): "a
+  confident Indian woman professional in her early 30s wearing a tailored navy business
+  suit".
 - Examples (adapt to the festival):
   "Close-up of {person}'s hands lighting a brass diya beside a marigold rangoli, shallow
   depth of field, background softly blurred into warm bokeh lights."

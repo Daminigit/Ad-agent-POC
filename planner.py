@@ -709,7 +709,8 @@ def render_prompt(render_type: str, camera_move: str, festival: str, aspect: str
             dressing = f"decorated for {festival} with {_INTERIOR_DECOR.get(festival, 'marigold garlands and lit brass lamps')}."
             light = " Warm evening light."
         base = (
-            f"Slow, smooth cinematic {phrase} through this room exactly as shown in the image, {dressing} "
+            f"Slow, smooth cinematic {phrase} through this room exactly as shown in the image, {dressing}"
+            f"{render_people('interior', festival)} "
             f"Keep the room layout, furniture, windows and finishes exactly as in the image.{light}"
         )
     else:  # amenity
@@ -720,22 +721,72 @@ def render_prompt(render_type: str, camera_move: str, festival: str, aspect: str
         else:
             setting = f"in the evening during {festival}, with {_AMENITY_LIGHTS.get(festival, 'warm string lights and lamps around it')}."
         base = (
-            f"Slow, cinematic {phrase} across this amenity exactly as shown in the image, {setting} "
+            f"Slow, cinematic {phrase} across this amenity exactly as shown in the image, {setting}"
+            f"{render_people('amenity', festival)} "
             "Keep the architecture, water, landscaping and furniture exactly as in the image."
         )
     return base + veo_suffix(aspect)
 
 
+_SAREE_BY_FESTIVAL = {
+    "Onam": "a cream and gold kasavu saree",
+    "Christmas": "a red and gold silk saree",
+    "Eid": "an emerald green and gold silk saree",
+    "New Year": "a midnight-blue and silver silk saree",
+    "Pongal/Sankranti": "a turmeric-yellow and green silk saree",
+}
+
+
 def _person(festival: str) -> str:
-    """ONE person description for the whole video."""
-    if festival in ("Christmas", "New Year"):
-        return "a graceful Indian woman in her early 30s with her hair in a low bun, wearing an elegant festive dress"
-    if festival == "Eid":
-        return "a graceful Indian woman in her early 30s wearing an elegant emerald and gold embroidered anarkali"
-    if festival in NEUTRAL_THEMES:
-        return "a warm Indian woman in her early 30s wearing a soft cream cotton kurta"
-    return ("a graceful Indian woman in her early 30s with jasmine flowers in her hair, wearing an "
-            "elegant maroon and gold silk saree")
+    """ONE person description for the whole video.
+    Festive and Family themes: an Indian woman in a saree. Standard ("None"): a professional."""
+    if festival == "None":
+        return "a confident Indian woman professional in her early 30s wearing a tailored navy business suit"
+    saree = _SAREE_BY_FESTIVAL.get(festival, "an elegant maroon and gold silk saree")
+    return f"a graceful Indian woman in her early 30s with jasmine flowers in her hair, wearing {saree}"
+
+
+_FESTIVE_ACTION = {
+    "Diwali": "kneels and lights a brass diya",
+    "Ugadi": "hangs a fresh mango-leaf toran at the doorway",
+    "Dussehra": "places a marigold garland",
+    "Ganesh Chaturthi": "arranges fresh flowers beside a small brass lamp",
+    "Onam": "places flower petals on the pookalam",
+    "Pongal/Sankranti": "draws a small kolam on the floor",
+    "Christmas": "hangs a glowing ornament on the Christmas tree",
+    "Eid": "lights a hanging lantern",
+    "New Year": "lights a few candles",
+}
+_FAMILY = "an Indian family in festive traditional clothes"
+PEOPLE_GUARD = (" The people are added naturally into the scene; do not change, move or cover the "
+                "architecture, furniture or layout.")
+
+
+def render_people(render_type: str, festival: str) -> str:
+    """Themed people for interior and amenity render scenes (exteriors stay empty)."""
+    woman = _person(festival)
+    if render_type == "interior":
+        if festival == "None":
+            line = f"{woman[0].upper() + woman[1:]} walks calmly through the room and pauses by the window."
+        elif festival == "Family":
+            line = (f"{woman[0].upper() + woman[1:]} shares a warm moment with her family in festive "
+                    "traditional clothes, parents, grandparents and two children smiling together.")
+        else:
+            action = _FESTIVE_ACTION.get(festival, "lights a brass lamp")
+            line = (f"{woman[0].upper() + woman[1:]} {action}, while {_FAMILY} smiles and "
+                    "celebrates nearby.")
+    elif render_type == "amenity":
+        if festival == "None":
+            line = "Two Indian professionals in smart business suits walk and talk calmly around it."
+        elif festival == "Family":
+            line = (f"{_FAMILY[0].upper() + _FAMILY[1:]} enjoys it together, children laughing, with "
+                    f"{woman} smiling beside them.")
+        else:
+            line = (f"A few Indian families in festive traditional clothes stroll and chat around it, "
+                    f"and {woman} greets them warmly.")
+    else:
+        return ""
+    return " " + line + PEOPLE_GUARD
 
 
 # Close-up shot lists per festival: (short name, sentence with {p} = person)
@@ -808,18 +859,18 @@ _CLOSEUPS: Dict[str, List[Tuple[str, str]]] = {
         ("string lights", "Extreme close-up of warm golden string lights twinkling, background softly blurred."),
     ],
     "None": [
-        ("lighting a candle", "Close-up of {p}'s hands lighting a candle at golden hour, shallow depth of field, background softly blurred into warm bokeh."),
-        ("smile in golden light", "Close-up of {p} smiling in warm golden-hour light, background completely blurred."),
-        ("tea for two", "Close-up of two hands holding cups of tea in warm golden light, background blurred."),
-        ("candle flame", "Extreme close-up of warm candle flames flickering, background in soft bokeh."),
-        ("fresh flowers", "Close-up of {p}'s hands arranging fresh flowers in a vase, golden light, background completely blurred."),
+        ("professional handshake", "Close-up of two Indian professionals in smart business suits shaking hands warmly, faces partly out of frame, background softly blurred into warm bokeh."),
+        ("confident smile", "Close-up of {p} smiling confidently in warm golden-hour light, background completely blurred."),
+        ("new house keys", "Close-up of {p}'s hands holding a set of new house keys, shallow depth of field, background softly blurred."),
+        ("coffee moment", "Close-up of {p} sipping coffee and smiling in soft golden light, background blurred."),
+        ("thumbs up", "Close-up of {p} giving a warm, reassuring nod, background in soft bokeh."),
     ],
     "Family": [
-        ("holding hands", "Close-up of a parent's hand holding a small child's hand, warm morning light, background softly blurred."),
-        ("smile in morning light", "Close-up of {p} smiling and laughing in soft morning sunlight, background completely blurred."),
-        ("family breakfast", "Close-up of a breakfast plate and cups of tea, family hands reaching in, background blurred."),
-        ("child's drawing", "Close-up of a child's hands colouring with crayons, warm light, background softly blurred."),
-        ("grandparent's hands", "Close-up of a grandparent's hands holding a child's hands, warm light, background in soft bokeh."),
+        ("family in festive clothes", "Close-up of an Indian family in festive traditional clothes laughing together, faces softly lit, background softly blurred."),
+        ("smile in a saree", "Close-up of {p} smiling as she adjusts her saree pallu, warm light, background completely blurred."),
+        ("sweets with family", "Close-up of a plate of Indian sweets on a festive cloth, family hands in festive sleeves reaching in, background blurred."),
+        ("holding hands", "Close-up of {p}'s hand holding a small child's hand, the child in festive traditional clothes, warm light, background softly blurred."),
+        ("grandparent blessing", "Close-up of a grandparent in a traditional kurta gently blessing a child in festive clothes, background in soft bokeh."),
     ],
 }
 CLOSEUP_GUARD = " Tight framing on people, hands and decorations only: no full room, no building, no amenity visible."
@@ -828,6 +879,7 @@ CLOSEUP_GUARD = " Tight framing on people, hands and decorations only: no full r
 def closeup_shot(festival: str, idx: int, aspect: str) -> Tuple[str, str]:
     shots = _CLOSEUPS.get(festival) or _CLOSEUPS["None"]
     name, text = shots[idx % len(shots)]
+    text = text.replace("{p}'s hands ", "the hands of {p}, ").replace("{p}'s hand ", "the hand of {p}, ")
     if idx >= len(shots):
         text = text.replace("Close-up", "Different-angle close-up", 1)
     return name, text.format(p=_person(festival)) + CLOSEUP_GUARD + veo_suffix(aspect)
@@ -974,7 +1026,7 @@ def _adjusted_keep(cands: List[_Cand], case: str, duration: int) -> Dict[int, fl
 
 def _preferred_clip_count(duration: int, endcard: int) -> int:
     if duration <= 12:
-        return 1
+        return 2   # opening + one festive close-up (every video has at least one close-up)
     if 16 <= duration <= 25:
         return 3
     if duration >= 50:
@@ -1036,6 +1088,11 @@ def _select_and_time(
             continue
         tried.append(n)
         chosen = by_keep[:n]
+        # Every video gets at least one festive close-up (people on screen)
+        if n >= 2 and not any(c.kind == "closeup" for c in chosen):
+            extra = next((c for c in by_keep[n:] if c.kind == "closeup"), None)
+            if extra is not None:
+                chosen = chosen[:-1] + [extra]
         lo = duration - endcard + n * crossfade
         total = math.ceil(lo - 1e-9)
         if total % 2:
@@ -1348,6 +1405,8 @@ def validate_plan(plan: AdPlan, usable_renders: Optional[List[RenderInfo]] = Non
                     use_count[name] = use_count.get(name, 0) + 1
         else:
             errors.append(f"{tag}: unknown veo_mode {s.veo_mode!r}.")
+    if veo and not any(s.kind == "festive_closeup" for s in veo):
+        errors.append("Every video needs at least one festive close-up.")
     for name, n in use_count.items():
         if n > 2:
             errors.append(f"Render {name} is used {n} times (max 2).")
