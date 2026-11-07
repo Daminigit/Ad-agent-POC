@@ -94,7 +94,7 @@ def main():
         help="Festival celebration theme (None for regular ad)"
     )
     parser.add_argument("--aspect", type=str, default="16:9", choices=["16:9", "9:16"], help="Aspect ratio")
-    parser.add_argument("--resolution", type=str, default="1080p", choices=["720p", "1080p"], help="Video resolution")
+    parser.add_argument("--resolution", type=str, default="720p", choices=["720p", "1080p"], help="Video resolution")
     parser.add_argument("--project", type=str, required=True, help="Path to project details JSON")
     parser.add_argument("--logo", type=str, default=None, help="Path to developer logo PNG (optional; name is shown instead)")
     parser.add_argument("--renders", type=str, required=True, help="Directory containing render images")

@@ -79,7 +79,7 @@ def render_endcard_image(
     logo_path: Optional[str] = None,
     festival: str = "Diwali",
     aspect: str = "16:9",
-    resolution: str = "1080p",
+    resolution: str = "720p",
     card: Optional[Dict[str, Any]] = None,
 ) -> Image.Image:
     """
@@ -187,7 +187,7 @@ def create_endcard_clip(
     logo_path: Optional[str] = None,
     festival: str = "Diwali",
     aspect: str = "16:9",
-    resolution: str = "1080p",
+    resolution: str = "720p",
     output_path: Optional[Path] = None,
     card: Optional[Dict[str, Any]] = None,
 ) -> Path:
