@@ -30,17 +30,38 @@ load_dotenv()
 CACHE_DIR = Path("./cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-DEFAULT_VEO_MODELS = [
-    "veo-3.1-fast",
-    "veo-2.0-generate-001",
-    "veo-3.1-generate-preview",
-]
+# Model names available on Vertex AI for this project (checked Nov 2026). Fast first (cheaper).
+VERTEX_VEO_MODELS = [m for m in [os.getenv("VEO_MODEL", "").strip(), "veo-3.1-fast-generate-001", "veo-3.1-generate-001"] if m]
+GEMINI_API_VEO_MODELS = ["veo-3.1-fast-generate-preview", "veo-3.1-generate-preview"]
+DEFAULT_VEO_MODELS = VERTEX_VEO_MODELS
+
+
+def _prepare_image(image_bytes: bytes, max_side: int = 1920) -> bytes:
+    """Re-encode the render as a JPEG no larger than 1920 px (keeps requests small)."""
+    from io import BytesIO
+    from PIL import Image
+
+    img = Image.open(BytesIO(image_bytes)).convert("RGB")
+    img.thumbnail((max_side, max_side), Image.LANCZOS)
+    out = BytesIO()
+    img.save(out, format="JPEG", quality=92)
+    return out.getvalue()
+
+
+def _error_message(resp: "requests.Response") -> str:
+    try:
+        return resp.json().get("error", {}).get("message", "")[:160]
+    except Exception:
+        return resp.text[:160]
 
 
 class VeoClient:
     def __init__(self, api_key: Optional[str] = None, dry_run: bool = False):
         self.dry_run = dry_run
         self.credits_depleted = False
+        self.api_error = ""
+        self.fallbacks: list = []        # [(prompt start, reason)] for every scene that was NOT made by Veo
+        self.live_clips = 0
         self.api_key = (
             api_key
             or os.getenv("GEMINI_API_KEY")
@@ -109,6 +130,8 @@ class VeoClient:
         # 1. Check Cache
         cache_key = self._compute_cache_key(prompt, dur, aspect_ratio, resolution, image_bytes)
         cached_file = CACHE_DIR / f"veo_{cache_key}.mp4"
+        # Fallback animations live under a separate name so they are never mistaken for Veo clips
+        mock_file = CACHE_DIR / f"mock_{cache_key}.mp4"
 
         if cached_file.exists() and cached_file.stat().st_size > 1000:
             if output_dest:
@@ -119,8 +142,9 @@ class VeoClient:
 
         # 2. Dry run / Mock simulation
         if self.dry_run or not self.is_configured():
+            self.fallbacks.append((prompt[:60], "simulation mode" if self.dry_run else "no Veo credentials"))
             mock_clip = self._generate_mock_clip(
-                cached_file, dur, aspect_ratio, resolution, image_path, prompt
+                mock_file, dur, aspect_ratio, resolution, image_path, prompt
             )
             if output_dest:
                 output_dest.parent.mkdir(parents=True, exist_ok=True)
@@ -128,9 +152,9 @@ class VeoClient:
                 return output_dest
             return mock_clip
 
-        # 3. Live API Call with Retry Logic (max 2 retries)
+        # 3. Live API call (1 retry – every attempt is a paid Veo job)
         last_error = None
-        for attempt in range(1, 4):  # 1 initial + 2 retries
+        for attempt in range(1, 3):
             try:
                 clip_path = self._call_veo_api(
                     prompt=prompt,
@@ -141,6 +165,7 @@ class VeoClient:
                     dest_file=cached_file,
                 )
                 if clip_path.exists() and clip_path.stat().st_size > 1000:
+                    self.live_clips += 1
                     if output_dest:
                         output_dest.parent.mkdir(parents=True, exist_ok=True)
                         output_dest.write_bytes(clip_path.read_bytes())
@@ -150,7 +175,8 @@ class VeoClient:
                 last_error = exc
                 err_str = str(exc)
                 # If Google account has no prepaid Veo credits, don't waste time retrying
-                if "402" in err_str or "depleted" in err_str or "RESOURCE_EXHAUSTED" in err_str or "billing" in err_str:
+                if ("402" in err_str or "depleted" in err_str or "RESOURCE_EXHAUSTED" in err_str
+                        or "billing" in err_str or "unavailable" in err_str or "safety filter" in err_str):
                     break
                 time.sleep(2 * attempt)
 
@@ -162,9 +188,10 @@ class VeoClient:
         else:
             print(f"[VeoClient] ⚠️ Live Veo API encountered error: {err_msg}. Falling back to high-fidelity cinematic simulation.")
             self.api_error = err_msg
+        self.fallbacks.append((prompt[:60], err_msg or "unknown Veo error"))
 
         mock_clip = self._generate_mock_clip(
-            cached_file, dur, aspect_ratio, resolution, image_path, prompt
+            mock_file, dur, aspect_ratio, resolution, image_path, prompt
         )
         if output_dest:
             output_dest.parent.mkdir(parents=True, exist_ok=True)
@@ -181,96 +208,89 @@ class VeoClient:
         image_bytes: Optional[bytes],
         dest_file: Path,
     ) -> Path:
-        """Execute Google Gemini API predictLongRunning call."""
+        """Start a Veo job and wait for the video.
+        Vertex AI (service account) when GCP_PROJECT_ID is set, otherwise the Gemini API key."""
         instance: Dict[str, Any] = {"prompt": prompt}
         if image_bytes:
+            jpeg = _prepare_image(image_bytes)
             instance["image"] = {
-                "bytesBase64Encoded": base64.b64encode(image_bytes).decode("utf-8"),
+                "bytesBase64Encoded": base64.b64encode(jpeg).decode("utf-8"),
                 "mimeType": "image/jpeg",
             }
 
-        payload = {
-            "instances": [instance],
-            "parameters": {
-                "aspectRatio": aspect_ratio,
-                "durationSeconds": duration,
-                "sampleCount": 1,
-                "personGeneration": "ALLOW_ADULT",
-            },
-        }
-
-        # Try models in priority order
-        last_resp_text = ""
         gcp_project = os.getenv("GCP_PROJECT_ID", "").strip()
-        gcp_location = os.getenv("GCP_LOCATION", "us-central1").strip()
+        gcp_location = os.getenv("GCP_LOCATION", "us-central1").strip() or "us-central1"
         headers = self._get_request_headers()
+        use_vertex = bool(gcp_project and "Authorization" in headers)
 
-        for model in DEFAULT_VEO_MODELS:
-            if gcp_project:
-                if "Authorization" in headers:
-                    url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/projects/{gcp_project}/locations/{gcp_location}/publishers/google/models/{model}:predictLongRunning"
-                else:
-                    url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/projects/{gcp_project}/locations/{gcp_location}/publishers/google/models/{model}:predictLongRunning?key={self.api_key}"
+        params: Dict[str, Any] = {
+            "aspectRatio": aspect_ratio,
+            "durationSeconds": duration,
+            "sampleCount": 1,
+        }
+        if use_vertex:
+            # Audio is OFF for every clip (the program adds music + voiceover); also cheaper.
+            params.update({"generateAudio": False, "resolution": resolution, "personGeneration": "allow_adult"})
+        else:
+            params["personGeneration"] = "allow_adult"
+        payload = {"instances": [instance], "parameters": params}
+
+        errors = []
+        for model in (VERTEX_VEO_MODELS if use_vertex else GEMINI_API_VEO_MODELS):
+            if use_vertex:
+                base = (f"https://{gcp_location}-aiplatform.googleapis.com/v1/projects/{gcp_project}"
+                        f"/locations/{gcp_location}/publishers/google/models/{model}")
+                url = f"{base}:predictLongRunning"
             else:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:predictLongRunning?key={self.api_key}"
-            resp = requests.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=30,
-            )
-
+            resp = requests.post(url, headers=headers, json=payload, timeout=60)
             if resp.status_code != 200:
-                last_resp_text = resp.text
+                errors.append(f"{model}: HTTP {resp.status_code} {_error_message(resp)}")
+                if resp.status_code in (402, 429) or "billing" in resp.text.lower():
+                    break
                 continue
-
-            res_json = resp.json()
-            operation_name = res_json.get("name")
+            operation_name = resp.json().get("name")
             if not operation_name:
+                errors.append(f"{model}: no operation returned")
                 continue
+            print(f"[VeoClient] {model} job started ({'image' if image_bytes else 'text'}-to-video, {duration}s)")
 
-            # Poll long-running operation
-            if gcp_project and not operation_name.startswith("http"):
-                if "Authorization" in headers:
-                    poll_url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/{operation_name}"
-                else:
-                    poll_url = f"https://{gcp_location}-aiplatform.googleapis.com/v1/{operation_name}?key={self.api_key}"
-            else:
-                poll_url = f"https://generativelanguage.googleapis.com/v1beta/{operation_name}?key={self.api_key}"
-            for _ in range(60):
+            # Poll until done (up to ~6 minutes)
+            for _ in range(72):
                 time.sleep(5)
-                poll_resp = requests.get(poll_url, headers=headers, timeout=30)
-                if poll_resp.status_code != 200:
+                if use_vertex:
+                    poll = requests.post(f"{base}:fetchPredictOperation", headers=headers,
+                                         json={"operationName": operation_name}, timeout=60)
+                else:
+                    poll = requests.get(f"https://generativelanguage.googleapis.com/v1beta/{operation_name}?key={self.api_key}",
+                                        timeout=60)
+                if poll.status_code != 200:
                     continue
-                poll_json = poll_resp.json()
+                pj = poll.json()
+                if not pj.get("done"):
+                    continue
+                if "error" in pj:
+                    raise RuntimeError(f"Veo job failed: {pj['error'].get('message', pj['error'])}")
+                data = pj.get("response", {})
+                data = data.get("generateVideoResponse", data)
+                videos = data.get("videos") or [s.get("video", {}) for s in data.get("generatedSamples", [])]
+                if not videos:
+                    filtered = data.get("raiMediaFilteredReasons") or data.get("raiMediaFilteredCount")
+                    raise RuntimeError(f"Veo returned no video{f' (safety filter: {filtered})' if filtered else ''}")
+                v = videos[0]
+                if v.get("bytesBase64Encoded"):
+                    dest_file.write_bytes(base64.b64decode(v["bytesBase64Encoded"]))
+                elif v.get("uri"):
+                    self._download_url(v["uri"], dest_file)
+                elif v.get("gcsUri"):
+                    raise RuntimeError("Veo saved the video to Cloud Storage; remove storageUri to get bytes back")
+                else:
+                    raise RuntimeError("Veo response had no video data")
+                print(f"[VeoClient] {model} video ready ({dest_file.stat().st_size // 1024} KB)")
+                return dest_file
+            raise RuntimeError(f"{model}: timed out waiting for the video")
 
-                if poll_json.get("done"):
-                    if "error" in poll_json:
-                        raise RuntimeError(f"Veo operation error: {poll_json['error']}")
-
-                    # Extract video
-                    resp_data = poll_json.get("response", {})
-                    gen_resp = (
-                        resp_data.get("generateVideoResponse", {})
-                        or resp_data.get("videoResponse", {})
-                        or resp_data
-                    )
-                    samples = gen_resp.get("generatedSamples", [])
-                    if not samples and "videos" in gen_resp:
-                        samples = [{"video": v} for v in gen_resp["videos"]]
-
-                    if not samples:
-                        raise RuntimeError(f"No video samples returned: {poll_json}")
-
-                    v_info = samples[0].get("video", {})
-                    if "bytesBase64Encoded" in v_info:
-                        dest_file.write_bytes(base64.b64decode(v_info["bytesBase64Encoded"]))
-                        return dest_file
-                    elif "uri" in v_info:
-                        self._download_url(v_info["uri"], dest_file)
-                        return dest_file
-
-        raise RuntimeError(f"Could not initialize Veo job across models {DEFAULT_VEO_MODELS}: {last_resp_text}")
+        raise RuntimeError("Veo unavailable – " + "; ".join(errors))
 
     def _download_url(self, url: str, dest: Path) -> None:
         r = requests.get(url, stream=True, timeout=120)

@@ -852,6 +852,7 @@ if generate_video_clicked:
                 reuse = f" (reusing 60s scene {s.reuses_scene_id})" if s.reuses_scene_id else ""
                 st.write(f"🎥 Scene {s.index} ({s.veo_mode}, Veo {s.veo_duration}s){reuse}: **{s.name}**...")
                 dest = cache_dir / f"clip_{dur}s_scene_{s.index}_{s.veo_duration}s.mp4"
+                before = len(veo.fallbacks)
                 try:
                     clip_file = veo.generate_clip(
                         prompt=s.prompt,
@@ -863,9 +864,15 @@ if generate_video_clicked:
                     )
                 except Exception as e:
                     st.warning(f"⚠️ Veo live render notice: {e}. Using cinematic motion fallback.")
+                    veo.fallbacks.append((s.prompt[:60], str(e)))
                     clip_file = veo._generate_mock_clip(
                         dest, s.veo_duration, aspect_ratio, resolution, s.render_path, s.prompt
                     )
+                if len(veo.fallbacks) > before:
+                    st.warning(f"⚠️ Scene {s.index} was NOT made by Veo ({veo.fallbacks[-1][1]}). "
+                               "A simple camera-move animation is used instead – no people or AI effects.")
+                else:
+                    st.write(f"✅ Scene {s.index} made by Veo")
                 clip_paths.append(clip_file)
 
             # Step 3: End Card
@@ -931,8 +938,12 @@ if generate_video_clicked:
             )
             results.append((pv, out_path, checks, voiceover_dest))
 
-        if getattr(veo, "credits_depleted", False):
-            st.info("ℹ️ Google Cloud Veo credits are depleted on your account (HTTP 402). Cinematic motion rendering was used at $0.00 cost.")
+        if veo.fallbacks:
+            reasons = sorted({r for _, r in veo.fallbacks})
+            st.error(
+                f"⚠️ {len(veo.fallbacks)} scene(s) were not made by Veo, so they have no people or AI effects. "
+                f"Reason: {'; '.join(r[:200] for r in reasons)}"
+            )
 
         status_box.update(label="🎉 Video Ad Export Complete & Verified!", state="complete", expanded=False)
 
@@ -971,7 +982,7 @@ if generate_video_clicked:
             - **Legal RERA Bar:** `RERA No: {project_data_obj.rera_number} | *T&C Apply`
             - **RERA Compliance:** **{'✓ Present on every frame' if checks['rera_bar_verified'] else '⚠️ Check frames'}**
             - **Frames Inspected:** `{checks['frames_checked']} frames verified (1 FPS)`
-            - **AI Video Engine:** `Google Gemini Veo 3.1 Fast`
+            - **AI Video Engine:** `{f"Veo 3.1 on Vertex AI – {veo.live_clips} clip(s) generated" if veo.live_clips else "Local fallback animation (Veo not used)"}`
             - **Estimated Cost:** `${plan.total_estimated_cost_usd:.2f} USD`
             """)
 
