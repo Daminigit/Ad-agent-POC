@@ -1393,24 +1393,15 @@ def _agent_user_message(project: ProjectData, renders: List[RenderInfo], duratio
     return msg
 
 
-def _call_gemini(system_prompt: str, user_msg: str, api_key: str) -> Dict[str, Any]:
-    import requests
+def _call_gemini(system_prompt: str, user_msg: str, api_key: str) -> Tuple[Dict[str, Any], str]:
+    """Vertex AI (service account) first, then the Gemini API key. See gemini_text.py."""
+    from gemini_text import generate_json
 
-    last = ""
-    for model in ("gemini-2.5-flash", "gemini-flash-latest"):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        resp = requests.post(url, json={
-            "systemInstruction": {"parts": [{"text": system_prompt}]},
-            "contents": [{"role": "user", "parts": [{"text": user_msg}]}],
-            "generationConfig": {"temperature": 0.3, "responseMimeType": "application/json", "maxOutputTokens": 8192},
-        }, timeout=60)
-        if resp.status_code != 200:
-            last = f"{model}: HTTP {resp.status_code}"
-            continue
-        text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
-        return json.loads(text)
-    raise RuntimeError(f"Gemini scene agent unavailable ({last}).")
+    data, used = generate_json(user_msg, system_prompt=system_prompt, api_key=api_key,
+                               temperature=0.3, max_output_tokens=32768, timeout=180)
+    if isinstance(data, list):
+        data = {"versions": data}
+    return data, used
 
 
 def plan_from_agent_dict(
@@ -1427,10 +1418,15 @@ def plan_from_agent_dict(
                              aspect, resolution, list(data.get("missing_fields") or []), data.get("case", "F"))
     price_per_sec = VEO_PRICING.get(resolution, 0.12)
     scenes: List[PlannedScene] = []
+    snapped = []
     for i, sd in enumerate(data.get("scenes", []), 1):
         r = by_name.get(sd.get("source_render") or "")
         mode = sd.get("veo_mode")
-        d = int(sd.get("duration", 0) or 0)
+        raw_d = float(sd.get("duration", 0) or 0)
+        # Veo only makes 4/6/8 s clips; the program trims, so round odd lengths up.
+        d = next((x for x in VEO_CLIP_LENGTHS if x >= raw_d), 8) if raw_d > 0 else 0
+        if d != raw_d:
+            snapped.append(f"scene {i}: {raw_d:g}s → {d}s")
         scenes.append(PlannedScene(
             index=i, name=f"{sd.get('kind', '')}: {sd.get('camera_move') or ''}".strip(": "),
             source_type="render_image" if mode == "image_to_video" else "festive_closeup",
@@ -1462,6 +1458,8 @@ def plan_from_agent_dict(
         duration_seconds=endcard, kind="end_card", prompt=" | ".join(end_card["lines"]),
     ))
     warnings = list(dict.fromkeys(list(data.get("warnings") or []) + _project_warnings(project, logo_available)))
+    if snapped:
+        warnings.append("Adjusted the agent's clip lengths to Veo's 4/6/8 s (" + ", ".join(snapped) + "); the last clip is trimmed.")
     plan = AdPlan(
         requested_duration=duration, final_duration=float(duration), endcard_duration=endcard,
         festival=festival, aspect=aspect, resolution=resolution, scenes=scenes, total_veo_seconds=0,
@@ -1495,15 +1493,18 @@ def plan_with_agent(
                               script=script, logo_available=logo_available)
     if rule_plan.blocked:
         return rule_plan
+    from gemini_text import credentials_available
+
     key = (api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
-    if not key or key.startswith("your_"):
-        rule_plan.warnings.append("No Gemini API key – used the rule-based scene planner.")
+    if not credentials_available(key):
+        rule_plan.warnings.append("No Gemini credentials – used the rule-based scene planner.")
         return rule_plan
     _, usable = _common_checks(project, renders)
     try:
-        data = _call_gemini(load_system_prompt(),
-                            _agent_user_message(project, renders, duration, festival, aspect, script), key)
+        data, used = _call_gemini(load_system_prompt(),
+                                  _agent_user_message(project, renders, duration, festival, aspect, script), key)
         plan = plan_from_agent_dict(data, project, usable, duration, festival, aspect, resolution, logo_available)
+        plan.planner = f"gemini-agent ({used})"
         if plan.blocked:
             return plan
         plan = _finish_plan(plan, project, script, "festive")

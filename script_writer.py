@@ -21,7 +21,6 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-import requests
 from dotenv import load_dotenv
 
 from planner import (
@@ -32,6 +31,7 @@ from planner import (
     endcard_seconds,
     max_voiceover_words,
 )
+from gemini_text import credentials_available, generate_json
 from project_data import ProjectData
 
 load_dotenv()
@@ -97,7 +97,7 @@ def generate_script_options(
     profile = get_script_timing_profile(duration)
 
     # 1. Try live Gemini generation if API key is active
-    if key and not key.startswith("your_"):
+    if credentials_available(key):
         try:
             live_options = _call_gemini_for_scripts(
                 project=project,
@@ -234,45 +234,25 @@ CRITICAL RULES:
 Return ONLY JSON. No markdown fences.
 {options_schema}"""
 
-    models = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.8-flash"]
-    for m in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
-        try:
-            resp = requests.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"temperature": 0.65, "maxOutputTokens": 900},
-                },
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                res_json = resp.json()
-                candidates = res_json.get("candidates", [])
-                if candidates:
-                    raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text.strip(), flags=re.MULTILINE)
-                    data = json.loads(cleaned)
-                    options = []
-                    for item in data[:3]:
-                        txt = item.get("text", "").strip()
-                        wcount = len(txt.split())
-                        options.append(ScriptOption(
-                            id=item.get("id", "opt"),
-                            title=item.get("title", "Script Option"),
-                            tone=item.get("tone", "Professional"),
-                            text=txt,
-                            word_count=wcount,
-                            estimated_speech_seconds=round(wcount / 2.25, 1),
-                            target_duration=duration,
-                            speaking_window=speaking_sec,
-                        ))
-                    return options
-        except Exception:
+    data, used = generate_json(prompt, api_key=api_key, temperature=0.65, max_output_tokens=16384, timeout=120)
+    print(f"[ScriptWriter] Scripts written by {used}")
+    options = []
+    for item in (data or [])[:3]:
+        txt = str(item.get("text", "")).strip()
+        if not txt:
             continue
-
-    return []
+        wcount = len(txt.split())
+        options.append(ScriptOption(
+            id=item.get("id", "opt"),
+            title=item.get("title", "Script Option"),
+            tone=item.get("tone", "Professional"),
+            text=txt,
+            word_count=wcount,
+            estimated_speech_seconds=round(wcount / 2.25, 1),
+            target_duration=duration,
+            speaking_window=speaking_sec,
+        ))
+    return options
 
 
 def _format_natural_amenities_for_speech(amenities: List[str]) -> Tuple[str, str]:
