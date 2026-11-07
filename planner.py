@@ -97,6 +97,7 @@ class PlannedScene:
     priority: float = 9.0               # lower = more important (used for trimming / deriving versions)
     reuses_scene_id: Optional[int] = None
     show_amenity_chips: bool = False
+    has_people: bool = False
 
     @property
     def source_render(self) -> Optional[str]:
@@ -715,7 +716,11 @@ _AMENITY_LIGHTS = {
 _SKY_FESTIVALS = ("Diwali", "New Year")
 
 
-def render_prompt(render_type: str, camera_move: str, festival: str, aspect: str) -> str:
+def render_prompt(render_type: str, camera_move: str, festival: str, aspect: str,
+                  people: Optional[bool] = None) -> str:
+    """people: None = default (interiors and amenities have people, exteriors don't)."""
+    if people is None:
+        people = render_type in ("interior", "amenity")
     phrase = _MOVE_PHRASE.get(camera_move, camera_move)
     if render_type == "exterior":
         prep = _EXTERIOR_PREP.get(camera_move, "toward")
@@ -731,7 +736,8 @@ def render_prompt(render_type: str, camera_move: str, festival: str, aspect: str
         base = (
             f"Slow, cinematic {phrase} {prep} the residential buildings in this image, {setting} "
             "Keep the buildings EXACTLY as in the image: same number of towers, same height, shape, "
-            "facade and colours. Do not add, remove or reshape any building. No people."
+            "facade and colours. Do not add, remove or reshape any building."
+            + (render_people("exterior", festival) if people else " No people.")
         )
     elif render_type == "interior":
         if festival == "Family":
@@ -745,7 +751,7 @@ def render_prompt(render_type: str, camera_move: str, festival: str, aspect: str
             light = " Warm evening light."
         base = (
             f"Slow, smooth cinematic {phrase} through this room exactly as shown in the image, {dressing}"
-            f"{render_people('interior', festival)} "
+            f"{render_people('interior', festival) if people else ' No people.'} "
             f"Keep the room layout, furniture, windows and finishes exactly as in the image.{light}"
         )
     else:  # amenity
@@ -757,7 +763,7 @@ def render_prompt(render_type: str, camera_move: str, festival: str, aspect: str
             setting = f"in the evening during {festival}, with {_AMENITY_LIGHTS.get(festival, 'warm string lights and lamps around it')}."
         base = (
             f"Slow, cinematic {phrase} across this amenity exactly as shown in the image, {setting}"
-            f"{render_people('amenity', festival)} "
+            f"{render_people('amenity', festival) if people else ' No people.'} "
             "Keep the architecture, water, landscaping and furniture exactly as in the image."
         )
     return base + veo_suffix(aspect)
@@ -805,128 +811,91 @@ PEOPLE_GUARD = (
 
 
 def render_people(render_type: str, festival: str) -> str:
-    """Themed people for interior and amenity render scenes (exteriors stay empty).
-    Few people, close to the camera, entering from the side – so faces are clear and nobody pops in."""
+    """Themed people for render scenes. Amenities and exteriors: one woman simply walking
+    (Family theme: the family of four). Interiors: the woman (and her son) at the festive decor."""
     woman = _person(festival)
     W = woman[0].upper() + woman[1:]
+    family = _NUCLEAR_FAMILY[0].upper() + _NUCLEAR_FAMILY[1:]
     if render_type == "interior":
         if festival == "None":
             line = (f"{W} walks into the room from the left, pauses in the foreground by the window and "
                     "turns to the camera with a calm smile.")
         elif festival == "Family":
-            line = (f"{_NUCLEAR_FAMILY[0].upper() + _NUCLEAR_FAMILY[1:]} walk into the room together from "
-                    "the left, the children holding their parents' hands, and stop in the foreground smiling "
-                    "at each other; the wife wears a silk saree. Only these four people, no one else.")
+            line = (f"{family} walk into the room together from the left, the children holding their parents' "
+                    "hands, and stop in the foreground smiling at each other; the wife wears a silk saree. "
+                    "Only these four people, no one else.")
         else:
             action = _FESTIVE_ACTION.get(festival, "lights a brass lamp")
             line = (f"{W} walks into the room from the left with her young son in festive traditional clothes "
-                    f"beside her; in the foreground she {action} "
-                    "while the boy watches and smiles. Only these two people.")
-    elif render_type == "amenity":
-        if festival == "None":
-            line = ("Two Indian professionals in smart business suits walk into the frame from the left, "
-                    "talking calmly, and pass through the foreground with their faces clearly visible.")
-        elif festival == "Family":
-            line = (f"{_NUCLEAR_FAMILY[0].upper() + _NUCLEAR_FAMILY[1:]} walk into the frame together from "
-                    "the left and stroll through the foreground, the two children laughing; the wife wears a "
-                    "silk saree. Only these four people, no one else.")
+                    f"beside her; in the foreground she {action} while the boy watches and smiles. "
+                    "Only these two people.")
+    elif render_type in ("amenity", "exterior"):
+        where = "along the path through this amenity" if render_type == "amenity" else \
+            "along the landscaped path in the foreground, in front of the buildings"
+        if festival == "Family":
+            line = (f"{family} walk slowly {where} from the left, the children holding their parents' hands; "
+                    "the wife wears a silk saree. Only these four people, no one else.")
         else:
-            line = (f"{W} walks into the frame from the left holding the hand of her young son in festive "
-                    "traditional clothes, the boy walking beside her, not behind; in the foreground they turn "
-                    "toward the camera and smile. Only these two people.")
+            line = (f"{W} walks slowly {where} from the left, enjoying the space, and glances at the "
+                    "camera with a gentle smile. Only this one person, no one else.")
     else:
         return ""
     return " " + line + PEOPLE_GUARD
 
 
-# Close-up shot lists per festival: (short name, sentence with {p} = person)
+# Decor-only AI close-ups (no people). Used only when a long video runs out of renders.
 _CLOSEUPS: Dict[str, List[Tuple[str, str]]] = {
     "Diwali": [
-        ("hands lighting a diya", "Close-up of {p}'s hands lighting a brass diya beside a marigold rangoli, shallow depth of field, background softly blurred into warm bokeh lights."),
-        ("smile with a lit diya", "Close-up of {p} smiling as she places a lit diya, face softly lit by the flame, background completely blurred."),
-        ("sweets and diyas", "Close-up of a plate of Indian sweets and diyas on a festive cloth, family hands reaching in, background blurred."),
-        ("finishing a rangoli", "Close-up of {p}'s hands sprinkling coloured powder to finish a rangoli, marigold petals around, background softly blurred."),
-        ("fireworks in the sky", "Close-up of colourful fireworks blooming in the dark night sky, only the sky in frame, no buildings or rooftops visible."),
-        ("row of diyas", "Close-up of a row of lit diyas flickering on a brass plate with marigold flowers, background melting into warm bokeh."),
-        ("sparklers", "Close-up of family hands holding sparklers, golden sparks glowing, faces out of frame, background blurred."),
-        ("marigold garland", "Close-up of {p}'s hands threading a marigold garland, gentle smile, background completely blurred."),
+        ("row of diyas", "Close-up of a row of lit brass diyas flickering beside marigold flowers, background melting into warm bokeh."),
+        ("rangoli", "Top-down close-up of a colourful flower rangoli with lit diyas around it, background softly blurred."),
+        ("sweets and diyas", "Close-up of a plate of Indian sweets beside lit diyas on a festive cloth, background blurred."),
+        ("fireworks in the sky", "Close-up of colourful fireworks blooming in the dark night sky, only the sky in frame, no buildings or rooftops."),
     ],
     "Ugadi": [
-        ("tying a mango-leaf toran", "Close-up of {p}'s hands tying a fresh mango-leaf toran, shallow depth of field, background softly blurred."),
-        ("drawing a rangoli", "Close-up of {p}'s hands drawing a colourful rangoli on the floor, marigold petals beside it, background blurred."),
-        ("smile with a brass lamp", "Close-up of {p} smiling as she lights a small brass lamp, face softly lit, background completely blurred."),
-        ("festive plate", "Close-up of a brass plate with mango leaves, flowers and festive sweets, family hands reaching in, background blurred."),
-        ("jasmine and marigold", "Close-up of jasmine and marigold flowers arranged in a brass bowl, soft morning light, background in warm bokeh."),
-        ("lamp flame", "Extreme close-up of a brass lamp flame flickering beside fresh flowers, background softly blurred."),
+        ("mango-leaf toran", "Close-up of a fresh mango-leaf toran with marigold flowers swaying gently, background softly blurred."),
+        ("rangoli", "Top-down close-up of a colourful rangoli with fresh flowers, background softly blurred."),
+        ("brass lamp", "Extreme close-up of a lit brass lamp beside jasmine flowers, background in warm bokeh."),
     ],
     "Dussehra": [
-        ("marigold garlands", "Close-up of {p}'s hands hanging a marigold garland, shallow depth of field, background softly blurred."),
-        ("lighting a brass lamp", "Close-up of {p} smiling as she lights a brass lamp, face softly lit, background completely blurred."),
-        ("sweets plate", "Close-up of a plate of Indian sweets and marigold flowers, family hands reaching in, background blurred."),
-        ("lamp flame", "Extreme close-up of a brass lamp flame with marigold petals around it, background in warm bokeh."),
-        ("flower petals", "Close-up of {p}'s hands scattering marigold petals, golden light, background completely blurred."),
+        ("marigold garlands", "Close-up of marigold garlands and lit brass lamps, background softly blurred."),
+        ("brass lamp", "Extreme close-up of a lit brass lamp with marigold petals around it, background in warm bokeh."),
     ],
     "Ganesh Chaturthi": [
-        ("flowers and lamps", "Close-up of {p}'s hands arranging fresh flowers beside small lit brass lamps, shallow depth of field, background softly blurred."),
-        ("lighting a lamp", "Close-up of {p} smiling as she lights a small brass lamp, face softly lit, background completely blurred."),
-        ("modak plate", "Close-up of a plate of modak sweets and flowers, family hands reaching in, background blurred."),
-        ("marigold garland", "Close-up of {p}'s hands threading a marigold garland, background in warm bokeh."),
-        ("lamp flame", "Extreme close-up of lit brass lamps and fresh flowers, background softly blurred."),
+        ("flowers and lamps", "Close-up of fresh flowers and small lit brass lamps, background softly blurred."),
+        ("modak plate", "Close-up of a plate of modak sweets with marigold flowers, background blurred."),
     ],
     "Onam": [
-        ("making a pookalam", "Close-up of {p}'s hands placing flower petals to complete a pookalam, shallow depth of field, background softly blurred."),
-        ("smile with a nilavilakku", "Close-up of {p} smiling beside a lit brass nilavilakku lamp, face softly lit, background completely blurred."),
-        ("banana-leaf feast", "Close-up of a banana-leaf feast with festive dishes, family hands reaching in, background blurred."),
-        ("pookalam petals", "Top-down close-up of a vibrant pookalam flower carpet, petals moving gently, background softly blurred."),
-        ("lamp flame", "Extreme close-up of a brass lamp flame with flowers around it, background in warm bokeh."),
+        ("pookalam", "Top-down close-up of a vibrant pookalam flower carpet, petals moving gently, background softly blurred."),
+        ("nilavilakku lamp", "Extreme close-up of a lit brass nilavilakku lamp with flowers, background in warm bokeh."),
     ],
     "Pongal/Sankranti": [
-        ("drawing a kolam", "Close-up of {p}'s hands drawing a white kolam pattern, shallow depth of field, background softly blurred."),
-        ("sugarcane and pot", "Close-up of a decorated earthen pot with sugarcane stalks and turmeric leaves, background blurred."),
-        ("smile with a kite", "Close-up of {p} smiling as she holds a colourful kite, bright sky behind her, background completely blurred."),
-        ("kites in the sky", "Close-up of colourful kites flying in a clear blue sky, only the sky in frame, no buildings visible."),
-        ("festive plate", "Close-up of a plate of sweet pongal and sugarcane pieces, family hands reaching in, background blurred."),
+        ("kolam", "Top-down close-up of a white kolam pattern with marigold petals, background softly blurred."),
+        ("kites in the sky", "Close-up of colourful kites flying in a clear blue sky, only the sky in frame, no buildings."),
     ],
     "Christmas": [
-        ("tree lights", "Close-up of {p}'s hands placing a glowing ornament on Christmas tree lights, shallow depth of field, background in warm bokeh."),
-        ("smile with a star", "Close-up of {p} smiling as she holds a glowing star ornament, face softly lit, background completely blurred."),
-        ("cake and candles", "Close-up of a plum cake and candles on a festive cloth, family hands reaching in, background blurred."),
-        ("fairy lights", "Extreme close-up of warm fairy lights twinkling on pine branches, background softly blurred."),
-        ("gift ribbons", "Close-up of hands tying a red ribbon on a gift, background in warm bokeh."),
+        ("tree lights", "Close-up of warm fairy lights and ornaments on pine branches, background in soft bokeh."),
+        ("star lantern", "Close-up of a glowing star lantern swaying gently, background softly blurred."),
     ],
     "Eid": [
-        ("lighting a lantern", "Close-up of {p}'s hands lighting a decorative lantern, shallow depth of field, background softly blurred into warm bokeh."),
-        ("smile with lanterns", "Close-up of {p} smiling beside glowing lanterns, face softly lit, background completely blurred."),
-        ("dates and sweets", "Close-up of a plate of dates and festive sweets, family hands reaching in, background blurred."),
-        ("hanging lanterns", "Close-up of intricate hanging lanterns glowing softly, background in warm bokeh."),
-        ("crescent moon sky", "Close-up of a thin crescent moon in the evening sky, only the sky in frame, no buildings visible."),
+        ("lanterns", "Close-up of intricate hanging lanterns glowing softly, background in warm bokeh."),
+        ("crescent moon", "Close-up of a thin crescent moon in the evening sky, only the sky in frame, no buildings."),
     ],
     "New Year": [
-        ("sparklers", "Close-up of {p}'s hands holding a sparkler, golden sparks glowing, background softly blurred into warm bokeh."),
-        ("smile in the glow", "Close-up of {p} smiling in the glow of a sparkler, background completely blurred."),
-        ("celebration table", "Close-up of glasses of juice and candles on a festive table, family hands raising a toast, background blurred."),
-        ("fireworks in the sky", "Close-up of fireworks blooming in the night sky, only the sky in frame, no buildings or rooftops visible."),
+        ("fireworks in the sky", "Close-up of fireworks blooming in the night sky, only the sky in frame, no buildings or rooftops."),
         ("string lights", "Extreme close-up of warm golden string lights twinkling, background softly blurred."),
     ],
     "None": [
-        ("professional handshake", "Close-up of two Indian professionals in smart business suits shaking hands warmly, faces partly out of frame, background softly blurred into warm bokeh."),
-        ("confident smile", "Close-up of {p} smiling confidently in warm golden-hour light, background completely blurred."),
-        ("new house keys", "Close-up of {p}'s hands holding a set of new house keys, shallow depth of field, background softly blurred."),
-        ("coffee moment", "Close-up of {p} sipping coffee and smiling in soft golden light, background blurred."),
-        ("thumbs up", "Close-up of {p} giving a warm, reassuring nod, background in soft bokeh."),
+        ("candle flame", "Extreme close-up of warm candle flames flickering, background in soft golden bokeh."),
+        ("fresh flowers", "Close-up of fresh white flowers in a glass vase in golden-hour light, background softly blurred."),
     ],
     "Family": [
-        ("family of four", "Close-up of an Indian husband and wife with their two young children, all four in festive traditional clothes, laughing together, faces softly lit, background softly blurred."),
-        ("smile in a saree", "Close-up of {p} smiling as she adjusts her saree pallu, warm light, background completely blurred."),
-        ("sweets with the family", "Close-up of a plate of Indian sweets on a festive cloth, the hands of a husband, wife and their two children in festive sleeves reaching in, background blurred."),
-        ("holding hands", "Close-up of {p}'s hand holding her young son's hand, the boy in festive traditional clothes, warm light, background softly blurred."),
-        ("father and daughter", "Close-up of an Indian father in a festive kurta smiling with his young daughter in a festive lehenga, background in soft bokeh."),
+        ("morning light", "Close-up of sunlight streaming through soft sheer curtains, background softly blurred."),
+        ("fresh flowers", "Close-up of fresh flowers in a vase in warm morning light, background softly blurred."),
     ],
 }
 CLOSEUP_GUARD = (
-    " Tight framing on people, hands and decorations only: no full room, no building, no amenity visible."
-    " Slow, steady motion with no sudden changes; any face in frame is sharp and natural, with realistic"
-    " features that stay consistent; no distorted or morphing faces or hands."
+    " Tight framing on decorations only: no people, no faces, no hands, no full room, no building,"
+    " no amenity visible. Slow, steady motion with no sudden changes."
 )
 
 
@@ -972,6 +941,7 @@ class _Cand:
     is_opening: bool = False
     cap: int = 8                    # max usable seconds (derived versions are capped by the cached clip)
     source: Optional[PlannedScene] = None
+    people: bool = False            # scene shows people (woman walking etc.)
 
 
 def _first_move(rtype: str, is_opening: bool) -> str:
@@ -993,21 +963,25 @@ def _reuse_move(rtype: str, first: str, case: str) -> str:
 
 
 def _build_candidates(case: str, renders: List[RenderInfo], max_closeups: int = 10) -> List[_Cand]:
+    """Scene candidates in priority order. People come from the renders (a woman walking through an
+    amenity, the family at an interior); AI close-ups are decor-only and used only when renders run out."""
     ext = [r for r in renders if r.render_type == "exterior"]
     inte = [r for r in renders if r.render_type == "interior"]
     amen = [r for r in renders if r.render_type == "amenity"]
     cands: List[_Cand] = []
 
     def prim(r: RenderInfo, group: int, seq: float, keep: float, opening: bool = False) -> _Cand:
-        c = _Cand(r.render_type, r, _first_move(r.render_type, opening), keep, group, seq, is_opening=opening)
+        c = _Cand(r.render_type, r, _first_move(r.render_type, opening), keep, group, seq, is_opening=opening,
+                  people=r.render_type in ("interior", "amenity"))
         cands.append(c)
         return c
 
     if case == "E":
-        cands.append(_Cand("closeup", None, "", 0.0, 0, 0, closeup_idx=0, is_opening=True))
-        body = inte + amen
-        for i, r in enumerate(body):
-            prim(r, 1 if r.render_type == "interior" else 2, i, 1 + 0.01 * i)
+        # No exterior: open on an amenity (woman walking) or an interior – never a building
+        body = amen + inte
+        prim(body[0], 0, 0, 0.0, opening=True)
+        for i, r in enumerate(body[1:]):
+            prim(r, 1 if r.render_type == "amenity" else 2, i, 1 + 0.01 * i)
     else:
         prim(ext[0], 0, 0, 0.0, opening=True)
         if case == "A":
@@ -1024,57 +998,45 @@ def _build_candidates(case: str, renders: List[RenderInfo], max_closeups: int = 
                 prim(r, grp, j, 1 + 0.01 * i)
                 i += 1
 
-    # Reuses (each render at most twice) and festive close-ups, interleaved
+    # Reuses (each render at most twice, different camera move)
     primaries = [c for c in cands if c.render is not None]
     reuse_order = sorted(primaries, key=lambda c: (c.render.render_type != "exterior", c.keep))
     reuses = [
-        _Cand(c.kind, c.render, _reuse_move(c.kind, c.move, case), 0, 5, 0, is_reuse=True)
+        _Cand(c.kind, c.render, _reuse_move(c.kind, c.move, case), 0, 5, 0, is_reuse=True,
+              people=c.kind in ("interior", "amenity"))
         for c in reuse_order
     ]
-    first_cu = 1 if case == "E" else 0
-    closeups = [_Cand("closeup", None, "", 0, 5, 0, closeup_idx=first_cu + k) for k in range(max_closeups)]
-
-    tail: List[_Cand] = []
     if case == "D" and reuses:
-        # D: exterior wide push-in -> same exterior, different camera move -> close-ups
+        # D: same exterior, different camera move, with a woman walking along the path in front
         r0 = reuses.pop(0)
-        r0.keep, r0.group, r0.seq = 1.5, 1, 0
+        r0.keep, r0.group, r0.seq, r0.people = 1.5, 1, 0, True
         cands.append(r0)
     ext_reuse_last = None
     if case == "B" and reuses and reuses[0].render is ext[0]:
-        ext_reuse_last = reuses.pop(0)   # B: second exterior move comes last, after close-ups
-    while closeups or reuses or ext_reuse_last:
-        if closeups:
-            tail.append(closeups.pop(0))
-        if ext_reuse_last is not None:
-            tail.append(ext_reuse_last)
-            ext_reuse_last = None
-            continue
-        if reuses:
-            tail.append(reuses.pop(0))
+        ext_reuse_last = reuses.pop(0)   # B: second exterior move comes last
+    tail: List[_Cand] = list(reuses)
+    if ext_reuse_last is not None:
+        tail.append(ext_reuse_last)
     for rank, c in enumerate(tail):
         c.keep = 2 + 0.01 * rank
         c.seq = rank
-        if case == "B" and c.is_reuse and c.render is ext[0]:
+        if case == "B" and c.render is (ext[0] if ext else None):
             c.group = 6
     cands.extend(tail)
+    # Decor-only AI close-ups: last resort when every render has been used twice
+    for k in range(max_closeups):
+        cands.append(_Cand("closeup", None, "", 3 + 0.01 * k, 5, 100 + k, closeup_idx=k))
     return cands
 
 
 def _adjusted_keep(cands: List[_Cand], case: str, duration: int) -> Dict[int, float]:
-    """20 s preset: opening + one highlight + a festive close-up."""
+    """Short videos: the first scene with people comes right after the opening."""
     keep = {id(c): c.keep for c in cands}
-    if 16 <= duration <= 25 and case in ("A", "B", "C", "D"):
+    if duration <= 25:
         ordered = sorted(cands, key=lambda c: c.keep)
-        highlight = next((c for c in ordered if not c.is_opening and c.kind != "closeup"), None)
-        closeup = next((c for c in ordered if c.kind == "closeup"), None)
-        for c in cands:
-            if c is highlight:
-                keep[id(c)] = 1.0
-            elif c is closeup:
-                keep[id(c)] = 1.1
-            elif not c.is_opening:
-                keep[id(c)] = c.keep + 1
+        people = next((c for c in ordered if not c.is_opening and c.people), None)
+        if people is not None:
+            keep[id(people)] = 0.5
     return keep
 
 
@@ -1142,9 +1104,9 @@ def _select_and_time(
             continue
         tried.append(n)
         chosen = by_keep[:n]
-        # Every video gets at least one festive close-up (people on screen)
-        if n >= 2 and not any(c.kind == "closeup" for c in chosen):
-            extra = next((c for c in by_keep[n:] if c.kind == "closeup"), None)
+        # Every video gets at least one scene with people (a woman walking through an amenity etc.)
+        if n >= 2 and not any(c.people for c in chosen):
+            extra = next((c for c in by_keep[n:] if c.people), None)
             if extra is not None:
                 chosen = chosen[:-1] + [extra]
         lo = duration - endcard + n * crossfade
@@ -1318,12 +1280,14 @@ def plan_video_ad(
         else:
             r = c.render
             title = "Opening" if c.is_opening else ("Reuse" if c.is_reuse else r.render_type.title())
+            who = " + people" if c.people else ""
             scenes.append(PlannedScene(
-                index=i, name=f"{title}: {r.render_type} – {c.move} ({Path(r.filepath).name})",
+                index=i, name=f"{title}: {r.render_type}{who} – {c.move} ({Path(r.filepath).name})",
                 source_type="render_image", duration_seconds=used, kind=f"render_{r.render_type}",
                 veo_mode="image_to_video", veo_duration=d, render_path=r.filepath,
                 render_type=r.render_type, camera_move=c.move,
-                prompt=render_prompt(r.render_type, c.move, festival, aspect), label=LABEL_RENDER,
+                prompt=render_prompt(r.render_type, c.move, festival, aspect, people=c.people),
+                label=LABEL_RENDER, has_people=c.people,
                 estimated_cost_usd=round(d * price_per_sec, 2), is_opening=c.is_opening, priority=c.keep,
             ))
 
@@ -1366,7 +1330,7 @@ def derive_version(base: AdPlan, project: ProjectData, duration: int, logo_avail
         kind = "closeup" if s.source_type == "festive_closeup" else (s.render_type or "exterior")
         cands.append(_Cand(
             kind, None, s.camera_move, s.priority, 0, s.index, is_opening=s.is_opening,
-            cap=s.veo_duration, source=s,
+            cap=s.veo_duration, source=s, people=s.has_people,
         ))
     chosen, durs, trim = _select_and_time(cands, base.case, duration, endcard, xf)
     scenes: List[PlannedScene] = []
@@ -1380,7 +1344,7 @@ def derive_version(base: AdPlan, project: ProjectData, duration: int, logo_avail
             veo_mode=src.veo_mode, veo_duration=src.veo_duration, render_path=src.render_path,
             render_type=src.render_type, camera_move=src.camera_move, prompt=src.prompt, label=src.label,
             estimated_cost_usd=0.0, is_opening=src.is_opening, priority=src.priority,
-            reuses_scene_id=src.index, show_amenity_chips=src.show_amenity_chips,
+            reuses_scene_id=src.index, show_amenity_chips=src.show_amenity_chips, has_people=src.has_people,
         ))
     if base.amenity_text_chips and not any(s.show_amenity_chips for s in scenes):
         rs = [s for s in scenes if s.source_type == "render_image"]
@@ -1467,8 +1431,11 @@ def validate_plan(plan: AdPlan, usable_renders: Optional[List[RenderInfo]] = Non
                     use_count[name] = use_count.get(name, 0) + 1
         else:
             errors.append(f"{tag}: unknown veo_mode {s.veo_mode!r}.")
-    if veo and not any(s.kind == "festive_closeup" for s in veo):
-        errors.append("Every video needs at least one festive close-up.")
+    if len(veo) >= 2 and not any(s.has_people for s in veo):
+        errors.append("Every video needs at least one render scene with people (e.g. a woman walking through an amenity).")
+    for s in veo:
+        if s.veo_mode == "text_to_video" and _PEOPLE_RE.search(s.prompt.split(" Tight framing")[0]):
+            errors.append(f"Scene {s.index}: AI close-ups must not show people.")
     for name, n in use_count.items():
         if n > 2:
             errors.append(f"Render {name} is used {n} times (max 2).")
@@ -1480,6 +1447,10 @@ def validate_plan(plan: AdPlan, usable_renders: Optional[List[RenderInfo]] = Non
     if not (plan.requested_duration - 1e-6 <= planned <= plan.requested_duration + 2 + 1e-6):
         errors.append(f"Scene durations add up to {planned:.1f}s; must be {plan.requested_duration}–{plan.requested_duration + 2}s (rule 8).")
     return errors
+
+
+_PEOPLE_RE = re.compile(r"\b(woman|women|man|men|lady|family|husband|wife|child|children|son|daughter|boy|girl|"
+                        r"professionals?|couple|people|person)\b", re.I)
 
 
 def project_rera_in(prompt: str, plan: AdPlan) -> bool:
@@ -1558,6 +1529,8 @@ def plan_from_agent_dict(
             render_path=r.filepath if r else None, render_type=r.render_type if r else None,
             camera_move=sd.get("camera_move") or "", prompt=sd.get("prompt", ""),
             label=LABEL_RENDER if mode == "image_to_video" else LABEL_CLOSEUP,
+            has_people=bool(mode == "image_to_video" and _PEOPLE_RE.search(
+                re.sub(r"\bno (people|person)\b", "", sd.get("prompt", ""), flags=re.I))),
             voiceover=sd.get("voiceover", ""), estimated_cost_usd=round(d * price_per_sec, 2),
             is_opening=(i == 1), priority=float(i),
         ))
